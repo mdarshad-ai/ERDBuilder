@@ -1,5 +1,56 @@
 # ER Diagram Builder
 
+## 🚀 Getting Started
+
+### Web App
+
+1. **Install dependencies:**
+   ```sh
+   npm install
+   ```
+2. **Start the web app:**
+   ```sh
+   npm start
+   ```
+   The app will be available at [http://localhost:3000](http://localhost:3000).
+
+3. **Build the web app:**
+   ```sh
+   npm run build
+   ```
+   The production-ready files will be in the `build/` folder.
+
+### Desktop (Electron) App
+
+1. **Install dependencies (includes Electron):**
+   ```sh
+   npm install
+   ```
+2. **Start the Electron app in development mode:**
+   ```sh
+   npm run start:electron
+   ```
+   This will launch the web server and open the Electron desktop window.
+
+3. **Build a production desktop app:**
+   ```sh
+   npm run build:electron
+   ```
+   The packaged app will be in the `dist/` folder.
+
+> **Note:** Electron and Electron Builder are large dependencies and are only needed for desktop builds. All build artifacts and binaries are ignored in version control.
+
+### Summary of Commands
+
+| Command                   | Purpose                        |
+|---------------------------|--------------------------------|
+| `npm start`               | Start web app (browser)        |
+| `npm run build`           | Build web app (static files)   |
+| `npm run start:electron`  | Start desktop app (dev)        |
+| `npm run build:electron`  | Build desktop app (prod)       |
+
+---
+
 A modern, interactive web application for designing Entity-Relationship (ER) diagrams. Create, visualize, and export ER diagrams with support for fact/dimension tables, SCD types, relationships, and more—all in your browser!
 
 ## Features
@@ -14,33 +65,6 @@ A modern, interactive web application for designing Entity-Relationship (ER) dia
 
 ## Demo
 [Live Demo Coming Soon]
-
-## Getting Started
-
-### Prerequisites
-- Node.js (v16 or higher recommended)
-- npm
-
-### Installation
-```bash
-# Clone the repository
-git clone https://github.com/mdarshad-ai/ERDBuilder.git
-cd ERDBuilder
-
-# Install dependencies
-npm install --legacy-peer-deps
-```
-
-### Running the App
-```bash
-npm start
-```
-Open [http://localhost:3000](http://localhost:3000) in your browser.
-
-### Building for Production
-```bash
-npm run build
-```
 
 ## Usage
 - Use the configuration panel to add tables, columns, and relationships
