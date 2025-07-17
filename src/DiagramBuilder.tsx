@@ -303,6 +303,8 @@ function DiagramBuilder({
   groupMode = false,
   onTableSelect,
   highlightedTableIds = null,
+  addTableOpen = false,
+  onAddTableOpen,
 }: {
   tables: TableConfig[];
   relationships: RelationshipConfig[];
@@ -317,10 +319,11 @@ function DiagramBuilder({
   groupMode?: boolean;
   onTableSelect?: (tableId: string) => void;
   highlightedTableIds?: string[] | null;
+  addTableOpen?: boolean;
+  onAddTableOpen?: (open: boolean) => void;
 }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [pendingConn, setPendingConn] = useState<{ source: string; target: string } | null>(null);
-  const [addTableOpen, setAddTableOpen] = useState(false);
 
   // Use positions from tables, default if missing
   const nodes: Node[] = tables.map((table, idx) => ({
@@ -384,35 +387,6 @@ function DiagramBuilder({
         <Background />
         <Controls />
       </ReactFlow>
-      <button
-        style={{
-          position: 'absolute',
-          left: '50%',
-          bottom: 24,
-          transform: 'translateX(-50%)',
-          background: '#1976d2',
-          color: '#fff',
-          border: 'none',
-          borderRadius: 24,
-          padding: '10px 28px',
-          fontSize: 16,
-          fontWeight: 600,
-          boxShadow: '0 2px 8px #0002',
-          cursor: 'pointer',
-          zIndex: 10,
-        }}
-        onClick={() => setAddTableOpen(true)}
-      >
-        + Add Table
-      </button>
-      <AddTableModal
-        open={addTableOpen}
-        onClose={() => setAddTableOpen(false)}
-        onSubmit={(name, type, scdType) => {
-          onAddTable(name, type, scdType);
-          setAddTableOpen(false);
-        }}
-      />
       <RelationshipModal
         open={modalOpen}
         sourceTable={tables.find(t => t.id === pendingConn?.source)}

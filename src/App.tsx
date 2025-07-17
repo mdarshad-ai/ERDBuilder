@@ -298,6 +298,68 @@ const SaveIcon = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" stroke="#1976d2" strokeWidth="2"/><path d="M17 21v-8H7v8" stroke="#1976d2" strokeWidth="2"/><path d="M7 3v5h8V3" stroke="#1976d2" strokeWidth="2"/></svg>
 );
 
+const DatabricksIcon = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+    <path d="M12 2L2 7v10l10 5 10-5V7l-10-5zM4 8.5L12 12l8-3.5V7L12 10.5 4 7v1.5z" fill="#FF3621"/>
+    <path d="M12 14l-8-3.5V7L12 10.5 20 7v3.5L12 14z" fill="#FF3621"/>
+  </svg>
+);
+
+function AddTableModal({ open, onClose, onSubmit }: { 
+  open: boolean; 
+  onClose: () => void; 
+  onSubmit: (name: string, type: 'fact' | 'dimension', scdType: 'none' | 'SCD1' | 'SCD2' | 'SCD3') => void; 
+}) {
+  const [name, setName] = useState('');
+  const [type, setType] = useState<'fact' | 'dimension'>('fact');
+  const [scdType, setSCDType] = useState<'none' | 'SCD1' | 'SCD2' | 'SCD3'>('none');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (name.trim()) {
+      onSubmit(name, type, scdType);
+      setName('');
+      setType('fact');
+      setSCDType('none');
+    }
+  };
+
+  if (!open) return null;
+  return (
+    <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'rgba(0,0,0,0.25)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ background: '#fff', borderRadius: 8, padding: 24, minWidth: 320, boxShadow: '0 2px 16px #0002' }}>
+        <h3 style={{ marginTop: 0 }}>Add Table</h3>
+        <form onSubmit={handleSubmit}>
+          <div style={{ marginBottom: 12 }}>
+            <label>Name: </label>
+            <input value={name} onChange={e => setName(e.target.value)} required style={{ marginLeft: 8 }} />
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <label>Type: </label>
+            <select value={type} onChange={e => setType(e.target.value as 'fact' | 'dimension')} style={{ marginLeft: 8 }}>
+              <option value="fact">Fact</option>
+              <option value="dimension">Dimension</option>
+            </select>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <label>SCD Type: </label>
+            <select value={scdType} onChange={e => setSCDType(e.target.value as any)} style={{ marginLeft: 8 }}>
+              <option value="none">No SCD</option>
+              <option value="SCD1">SCD1</option>
+              <option value="SCD2">SCD2</option>
+              <option value="SCD3">SCD3</option>
+            </select>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <button type="button" onClick={onClose} style={{ padding: '4px 12px' }}>Cancel</button>
+            <button type="submit" style={{ padding: '4px 12px', background: '#1976d2', color: '#fff', border: 'none', borderRadius: 4 }}>Add</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChange, onAddColumn, onDeleteColumn, onAddRelationship, onRenameTable, onRenameColumn, onAddTable, onLoad, projectName, onRenameProject, groups, setGroups, globalGroups, setGlobalGroups, projects, currentProjectId }: { tables: TableConfig[]; relationships: RelationshipConfig[]; onDeleteTable: (id: string) => void; onNodePositionChange: (id: string, pos: { x: number; y: number }) => void; onAddColumn: (tableId: string, colName: string) => void; onDeleteColumn: (tableId: string, colIdx: number) => void; onAddRelationship: (sourceId: string, targetId: string, relType: '1:N' | 'N:M', sourceCol: string, targetCol: string) => void; onRenameTable: (tableId: string, newName: string) => void; onRenameColumn: (tableId: string, colIdx: number, newName: string) => void; onAddTable: (name: string, type: 'fact' | 'dimension', scdType: 'none' | 'SCD1' | 'SCD2' | 'SCD3') => void; onLoad: (data: { tables: TableConfig[]; relationships: RelationshipConfig[]; groups: Group[] }) => void; projectName: string; onRenameProject: (newName: string) => void; groups: Group[]; setGroups: (groups: Group[]) => void; globalGroups: GlobalGroup[]; setGlobalGroups: (groups: GlobalGroup[]) => void; projects: Project[]; currentProjectId: string; }) {
   const diagramRef = useRef<HTMLDivElement>(null);
 
@@ -546,6 +608,106 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
     XLSX.writeFile(wb, safeFileName(projectName, '-export.xlsx'));
   };
 
+  // Import Databricks SQL
+  const handleImportDatabricksSQL = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const sqlContent = evt.target?.result as string;
+        
+        // Parse SQL to extract table definitions
+        const tables: TableConfig[] = [];
+        const relationships: RelationshipConfig[] = [];
+        
+        // Split by CREATE TABLE statements
+        const createTableRegex = /CREATE\s+(?:TEMPORARY\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s(]+)\s*\(([\s\S]*?)\)\s*(?:USING\s+[^\s]+)?\s*(?:AS\s+SELECT\s+[\s\S]*)?;?/gi;
+        let match;
+        
+        while ((match = createTableRegex.exec(sqlContent)) !== null) {
+          const tableName = match[1].replace(/[`"]/g, ''); // Remove backticks/quotes
+          const columnDefinitions = match[2];
+          
+          const columns: ColumnConfig[] = [];
+          const columnLines = columnDefinitions.split(',').map(line => line.trim()).filter(line => line.length > 0);
+          
+          columnLines.forEach(line => {
+            // Skip constraints and other non-column definitions
+            if (line.startsWith('PRIMARY KEY') || line.startsWith('FOREIGN KEY') || 
+                line.startsWith('CONSTRAINT') || line.startsWith('INDEX') || 
+                line.startsWith('UNIQUE') || line.startsWith('CHECK')) {
+              return;
+            }
+            
+            // Parse column definition: column_name data_type [constraints]
+            const columnMatch = line.match(/^([^\s]+)\s+([^\s]+)(?:\s+(.+))?$/);
+            if (columnMatch) {
+              const columnName = columnMatch[1].replace(/[`"]/g, '');
+              const dataType = columnMatch[2].toUpperCase();
+              const constraints = columnMatch[3] || '';
+              
+              columns.push({
+                name: columnName,
+                type: dataType,
+                isPK: constraints.includes('PRIMARY KEY') || constraints.includes('NOT NULL') && columnName.toLowerCase().includes('id'),
+                isFK: constraints.includes('FOREIGN KEY') || columnName.toLowerCase().includes('_id'),
+                nullable: !constraints.includes('NOT NULL'),
+              });
+            }
+          });
+          
+          if (columns.length > 0) {
+            tables.push({
+              id: tableName.toLowerCase().replace(/[^a-z0-9]/g, '_'),
+              name: tableName,
+              type: 'dimension', // Default to dimension, can be refined later
+              scdType: 'none',
+              columns,
+              position: { x: 100 + (tables.length % 4) * 250, y: 50 + Math.floor(tables.length / 4) * 200 },
+            });
+          }
+        }
+        
+        // Try to extract relationships from FOREIGN KEY constraints
+        const fkRegex = /FOREIGN\s+KEY\s*\(\s*([^)]+)\s*\)\s+REFERENCES\s+([^\s(]+)\s*\(\s*([^)]+)\s*\)/gi;
+        let fkMatch;
+        
+        while ((fkMatch = fkRegex.exec(sqlContent)) !== null) {
+          const fkColumn = fkMatch[1].replace(/[`"]/g, '');
+          const referencedTable = fkMatch[2].replace(/[`"]/g, '');
+          const referencedColumn = fkMatch[3].replace(/[`"]/g, '');
+          
+          // Find the tables involved
+          const sourceTable = tables.find(t => t.columns.some(c => c.name === fkColumn));
+          const targetTable = tables.find(t => t.name === referencedTable);
+          
+          if (sourceTable && targetTable) {
+            relationships.push({
+              id: `${sourceTable.id}-${targetTable.id}`,
+              sourceTableId: sourceTable.id,
+              targetTableId: targetTable.id,
+              type: '1:N',
+              fkColumn,
+            });
+          }
+        }
+        
+        if (tables.length > 0) {
+          onLoad({ tables, relationships, groups: [] });
+          alert(`Successfully imported ${tables.length} tables and ${relationships.length} relationships from Databricks SQL.`);
+        } else {
+          alert('No valid table definitions found in the SQL file.');
+        }
+      } catch (error) {
+        console.error('Error parsing Databricks SQL:', error);
+        alert('Error parsing Databricks SQL file. Please check the file format.');
+      }
+    };
+    reader.readAsText(file);
+  };
+
   // --- GROUP MODE STATE ---
   const [groupMode, setGroupMode] = useState(false);
   const [groupType, setGroupType] = useState<'local' | 'global'>('local');
@@ -559,6 +721,14 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
   const [groupEditGlobalTables, setGroupEditGlobalTables] = useState<{ projectId: string; tableId: string }[]>([]);
   const [globalProjectTab, setGlobalProjectTab] = useState(currentProjectId);
   // --- END GROUP MODE STATE ---
+
+  // --- IMPORT/EXPORT TABS STATE ---
+  const [activeTab, setActiveTab] = useState<'import' | 'export'>('export');
+  // --- END IMPORT/EXPORT TABS STATE ---
+
+  // --- ADD TABLE MODAL STATE ---
+  const [addTableOpen, setAddTableOpen] = useState(false);
+  // --- END ADD TABLE MODAL STATE ---
 
   // --- GROUP MODE HANDLERS ---
   const handleToggleGroupMode = () => {
@@ -695,19 +865,67 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
             )}
           </span>
         )}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <IconButton onClick={handleExportPNG} title="Export as PNG"><ImageIcon /></IconButton>
-          <IconButton onClick={handleExportSQL} title="Export as SQL"><SQLIcon /></IconButton>
-          <IconButton onClick={handleExportJSON} title="Save as JSON"><SaveIcon /></IconButton>
-          <label title="Load JSON" style={{ display: 'inline-block', cursor: 'pointer' }}>
-            <UploadIcon />
-            <input type="file" accept="application/json" style={{ display: 'none' }} onChange={handleImportJSON} />
-          </label>
-          <label title="Import Excel" style={{ display: 'inline-block', cursor: 'pointer' }}>
-            <ExcelIcon />
-            <input type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={handleImportExcel} />
-          </label>
-          <IconButton onClick={handleExportExcel} title="Export as Excel"><DownloadIcon /></IconButton>
+        {/* Import/Export Tabs */}
+        <div style={{ display: 'flex', alignItems: 'center', background: '#f5f5f5', borderRadius: 8, padding: 4, marginLeft: 16 }}>
+          <button
+            onClick={() => setActiveTab('export')}
+            style={{
+              padding: '8px 16px',
+              border: 'none',
+              borderRadius: 6,
+              background: activeTab === 'export' ? '#1976d2' : 'transparent',
+              color: activeTab === 'export' ? '#fff' : '#666',
+              fontWeight: 600,
+              cursor: 'pointer',
+              fontSize: 14,
+              transition: 'all 0.2s',
+            }}
+          >
+            Export
+          </button>
+          <button
+            onClick={() => setActiveTab('import')}
+            style={{
+              padding: '8px 16px',
+              border: 'none',
+              borderRadius: 6,
+              background: activeTab === 'import' ? '#1976d2' : 'transparent',
+              color: activeTab === 'import' ? '#fff' : '#666',
+              fontWeight: 600,
+              cursor: 'pointer',
+              fontSize: 14,
+              transition: 'all 0.2s',
+            }}
+          >
+            Import
+          </button>
+        </div>
+        
+        {/* Export/Import Buttons */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 12 }}>
+          {activeTab === 'export' ? (
+            <>
+              <IconButton onClick={handleExportPNG} title="Export as PNG"><ImageIcon /></IconButton>
+              <IconButton onClick={handleExportSQL} title="Export as SQL"><SQLIcon /></IconButton>
+              <IconButton onClick={handleExportJSON} title="Save as JSON"><SaveIcon /></IconButton>
+              <IconButton onClick={handleExportExcel} title="Export as Excel"><DownloadIcon /></IconButton>
+            </>
+          ) : (
+            <>
+              <label title="Import JSON" style={{ display: 'inline-block', cursor: 'pointer' }}>
+                <UploadIcon />
+                <input type="file" accept="application/json" style={{ display: 'none' }} onChange={handleImportJSON} />
+              </label>
+              <label title="Import Excel" style={{ display: 'inline-block', cursor: 'pointer' }}>
+                <ExcelIcon />
+                <input type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={handleImportExcel} />
+              </label>
+              <label title="Import Databricks SQL" style={{ display: 'inline-block', cursor: 'pointer' }}>
+                <DatabricksIcon />
+                <input type="file" accept=".sql" style={{ display: 'none' }} onChange={handleImportDatabricksSQL} />
+              </label>
+            </>
+          )}
         </div>
         <button
           style={{
@@ -722,50 +940,73 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
             fontSize: 15,
           }}
           onClick={handleToggleGroupMode}
-          title="Toggle group mode"
+          title="Toggle Data Products mode"
         >
-          {groupMode ? 'Exit Group Mode' : 'Group Mode'}
+          {groupMode ? 'Exit Data Products' : 'Data Products'}
+        </button>
+        <button
+          style={{
+            marginLeft: 16,
+            background: '#1976d2',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 6,
+            padding: '8px 20px',
+            fontWeight: 600,
+            cursor: 'pointer',
+            fontSize: 15,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+          }}
+          onClick={() => setAddTableOpen(true)}
+          title="Add new table"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" fill="currentColor"/>
+          </svg>
+          Add Table
         </button>
       </div>
-      {/* GROUP BUTTONS */}
+      {/* DATA PRODUCT BUTTONS */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-        {/* Local groups */}
+        {/* Local data products */}
         {groups.map(group => (
           <div key={group.id} style={{ display: 'flex', alignItems: 'center', background: activeGroupIds.includes(group.id) ? '#1976d2' : '#eee', color: activeGroupIds.includes(group.id) ? '#fff' : '#1976d2', borderRadius: 6, padding: '4px 10px', fontWeight: 600, cursor: 'pointer' }}>
             <span onClick={() => handleToggleGroup(group.id)}>{group.name}</span>
-            <span style={{ marginLeft: 6, cursor: 'pointer' }} title="Group settings" onClick={() => handleOpenGroupModal(group.id, false)}>
+            <span style={{ marginLeft: 6, cursor: 'pointer' }} title="Data Product settings" onClick={() => handleOpenGroupModal(group.id, false)}>
               <svg width="16" height="16" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8" stroke="#888" strokeWidth="2"/><path d="M10 6v4l3 2" stroke="#888" strokeWidth="2" strokeLinecap="round"/></svg>
             </span>
           </div>
         ))}
-        {/* Global groups */}
+        {/* Global data products */}
         {globalGroups.map(group => (
           <div key={group.id} style={{ display: 'flex', alignItems: 'center', background: activeGlobalGroupIds.includes(group.id) ? '#1976d2' : '#eee', color: activeGlobalGroupIds.includes(group.id) ? '#fff' : '#1976d2', borderRadius: 6, padding: '4px 10px', fontWeight: 600, cursor: 'pointer' }}>
             <span onClick={() => handleToggleGlobalGroup(group.id)}>
               <svg width="16" height="16" viewBox="0 0 20 20" fill="none" style={{ marginRight: 4, verticalAlign: 'middle' }}><circle cx="10" cy="10" r="8" stroke="#1976d2" strokeWidth="2" fill="#fff"/><path d="M10 2a8 8 0 0 1 0 16M2 10a8 8 0 0 1 16 0" stroke="#1976d2" strokeWidth="1.5"/><ellipse cx="10" cy="10" rx="3.5" ry="8" stroke="#1976d2" strokeWidth="1.5"/></svg>
               {group.name}
             </span>
-            <span style={{ marginLeft: 6, cursor: 'pointer' }} title="Global group settings" onClick={() => handleOpenGroupModal(group.id, true)}>
+            <span style={{ marginLeft: 6, cursor: 'pointer' }} title="Global Data Product settings" onClick={() => handleOpenGroupModal(group.id, true)}>
               <svg width="16" height="16" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8" stroke="#888" strokeWidth="2"/><path d="M10 6v4l3 2" stroke="#888" strokeWidth="2" strokeLinecap="round"/></svg>
             </span>
           </div>
         ))}
       </div>
-      {/* GROUP MODE UI */}
+      {/* DATA PRODUCTS MODE UI */}
       {groupMode && (
         <div style={{ background: '#e3f2fd', borderRadius: 8, padding: 16, marginBottom: 16 }}>
-          <div style={{ fontWeight: 600, marginBottom: 8 }}>Create a group:</div>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>Create a Data Product:</div>
           <div style={{ marginBottom: 12 }}>
             <label>
-              <input type="radio" checked={groupType === 'local'} onChange={() => setGroupType('local')} /> Local Group
+              <input type="radio" checked={groupType === 'local'} onChange={() => setGroupType('local')} /> Local Data Product
             </label>
             <label style={{ marginLeft: 18 }}>
-              <input type="radio" checked={groupType === 'global'} onChange={() => setGroupType('global')} /> Global Group
+              <input type="radio" checked={groupType === 'global'} onChange={() => setGroupType('global')} /> Global Data Product
             </label>
           </div>
           {groupType === 'local' ? (
             <>
-              <div style={{ fontWeight: 500, marginBottom: 8 }}>Select tables to group (this project):</div>
+              <div style={{ fontWeight: 500, marginBottom: 8 }}>Select tables for Data Product (this project):</div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
                 {tables.map(t => (
                   <div
@@ -787,9 +1028,9 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
                 ))}
               </div>
             </>
-          ) : (
+                      ) : (
             <>
-              <div style={{ fontWeight: 500, marginBottom: 8 }}>Select tables to group (any project):</div>
+              <div style={{ fontWeight: 500, marginBottom: 8 }}>Select tables for Data Product (any project):</div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
                 {projects.map(p => (
                   <button
@@ -835,7 +1076,7 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
           <input
             value={groupNameInput}
             onChange={e => setGroupNameInput(e.target.value)}
-            placeholder="Group name"
+            placeholder="Data Product name"
             style={{ fontSize: 15, padding: '4px 10px', borderRadius: 4, border: '1px solid #bbb', marginRight: 8 }}
           />
           <button
@@ -843,17 +1084,17 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
             style={{ background: '#1976d2', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 18px', fontWeight: 600, fontSize: 15 }}
             disabled={groupType === 'local' ? (!groupNameInput.trim() || selectedTables.length === 0) : (!groupNameInput.trim() || selectedGlobalTables.length === 0)}
           >
-            Create Group
+            Create Data Product
           </button>
         </div>
       )}
-      {/* GROUP MANAGEMENT MODAL */}
+      {/* DATA PRODUCT MANAGEMENT MODAL */}
       {groupModal.open && (
         <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'rgba(0,0,0,0.25)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div style={{ background: '#fff', borderRadius: 8, padding: 24, minWidth: 340, boxShadow: '0 2px 16px #0002' }}>
-            <h3 style={{ marginTop: 0 }}>{groupModal.global ? 'Edit Global Group' : 'Edit Group'}</h3>
+            <h3 style={{ marginTop: 0 }}>{groupModal.global ? 'Edit Global Data Product' : 'Edit Data Product'}</h3>
             <div style={{ marginBottom: 12 }}>
-              <label>Group Name: </label>
+              <label>Data Product Name: </label>
               <input value={groupNameInput} onChange={e => setGroupNameInput(e.target.value)} style={{ marginLeft: 8 }} />
             </div>
             <div style={{ marginBottom: 12 }}>
@@ -952,8 +1193,20 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
           groupMode={groupMode}
           onTableSelect={handleTableClick}
           highlightedTableIds={highlightedTableIds || highlightedGlobalTableIds}
+          addTableOpen={addTableOpen}
+          onAddTableOpen={setAddTableOpen}
         />
       </div>
+      
+      {/* ADD TABLE MODAL */}
+      <AddTableModal
+        open={addTableOpen}
+        onClose={() => setAddTableOpen(false)}
+        onSubmit={(name, type, scdType) => {
+          onAddTable(name, type, scdType);
+          setAddTableOpen(false);
+        }}
+      />
     </div>
   );
 }
@@ -962,7 +1215,7 @@ function App() {
   // Multi-project state
   const [projects, setProjects] = useState<Project[]>([{
     id: '1',
-    name: 'Customer Analytics',
+    name: 'New Diagram',
     tables: [],
     relationships: [],
     groups: [],
