@@ -314,6 +314,30 @@ function AddTableModal({ open, onClose, onSubmit }: {
   const [type, setType] = useState<'fact' | 'dimension'>('fact');
   const [scdType, setSCDType] = useState<'none' | 'SCD1' | 'SCD2' | 'SCD3'>('none');
 
+  // Auto-detect table type based on naming patterns
+  const autoDetectTableType = (tableName: string): 'fact' | 'dimension' => {
+    const lowerName = tableName.toLowerCase();
+    
+    // Fact table patterns
+    if (lowerName.includes('_fact') || lowerName.includes('fact_') || 
+        lowerName.endsWith('fact') || lowerName.startsWith('fact') ||
+        lowerName.includes('transaction') || lowerName.includes('event') ||
+        lowerName.includes('measure') || lowerName.includes('metric')) {
+      return 'fact';
+    }
+    
+    // Dimension table patterns
+    if (lowerName.includes('_dim') || lowerName.includes('dim_') || 
+        lowerName.endsWith('dim') || lowerName.startsWith('dim') ||
+        lowerName.includes('lookup') || lowerName.includes('reference') ||
+        lowerName.includes('master') || lowerName.includes('code')) {
+      return 'dimension';
+    }
+    
+    // Default to dimension for safety
+    return 'dimension';
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (name.trim()) {
@@ -332,7 +356,24 @@ function AddTableModal({ open, onClose, onSubmit }: {
         <form onSubmit={handleSubmit}>
           <div style={{ marginBottom: 12 }}>
             <label>Name: </label>
-            <input value={name} onChange={e => setName(e.target.value)} required style={{ marginLeft: 8 }} />
+            <input 
+              value={name} 
+              onChange={e => {
+                const newName = e.target.value;
+                setName(newName);
+                // Auto-detect table type when user types
+                if (newName.trim()) {
+                  setType(autoDetectTableType(newName));
+                }
+              }} 
+              required 
+              style={{ marginLeft: 8 }} 
+            />
+            {name.trim() && (
+              <div style={{ fontSize: 12, color: '#666', marginTop: 4, marginLeft: 8 }}>
+                Auto-detected as: <strong>{autoDetectTableType(name)}</strong> table
+              </div>
+            )}
           </div>
           <div style={{ marginBottom: 12 }}>
             <label>Type: </label>
@@ -360,7 +401,7 @@ function AddTableModal({ open, onClose, onSubmit }: {
   );
 }
 
-function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChange, onAddColumn, onDeleteColumn, onAddRelationship, onRenameTable, onRenameColumn, onAddTable, onLoad, projectName, onRenameProject, groups, setGroups, globalGroups, setGlobalGroups, projects, currentProjectId }: { tables: TableConfig[]; relationships: RelationshipConfig[]; onDeleteTable: (id: string) => void; onNodePositionChange: (id: string, pos: { x: number; y: number }) => void; onAddColumn: (tableId: string, colName: string) => void; onDeleteColumn: (tableId: string, colIdx: number) => void; onAddRelationship: (sourceId: string, targetId: string, relType: '1:N' | 'N:M', sourceCol: string, targetCol: string) => void; onRenameTable: (tableId: string, newName: string) => void; onRenameColumn: (tableId: string, colIdx: number, newName: string) => void; onAddTable: (name: string, type: 'fact' | 'dimension', scdType: 'none' | 'SCD1' | 'SCD2' | 'SCD3') => void; onLoad: (data: { tables: TableConfig[]; relationships: RelationshipConfig[]; groups: Group[] }) => void; projectName: string; onRenameProject: (newName: string) => void; groups: Group[]; setGroups: (groups: Group[]) => void; globalGroups: GlobalGroup[]; setGlobalGroups: (groups: GlobalGroup[]) => void; projects: Project[]; currentProjectId: string; }) {
+function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChange, onAddColumn, onDeleteColumn, onAddRelationship, onRenameTable, onRenameColumn, onAddTable, onLoad, projectName, onRenameProject, groups, setGroups, globalGroups, setGlobalGroups, projects, currentProjectId, focusMode, setFocusMode, focusedTableId, setFocusedTableId, focusHighlightedTableIds, handleTableSelection }: { tables: TableConfig[]; relationships: RelationshipConfig[]; onDeleteTable: (id: string) => void; onNodePositionChange: (id: string, pos: { x: number; y: number }) => void; onAddColumn: (tableId: string, colName: string) => void; onDeleteColumn: (tableId: string, colIdx: number) => void; onAddRelationship: (sourceId: string, targetId: string, relType: '1:N' | 'N:M', sourceCol: string, targetCol: string) => void; onRenameTable: (tableId: string, newName: string) => void; onRenameColumn: (tableId: string, colIdx: number, newName: string) => void; onAddTable: (name: string, type: 'fact' | 'dimension', scdType: 'none' | 'SCD1' | 'SCD2' | 'SCD3') => void; onLoad: (data: { tables: TableConfig[]; relationships: RelationshipConfig[]; groups: Group[] }) => void; projectName: string; onRenameProject: (newName: string) => void; groups: Group[]; setGroups: (groups: Group[]) => void; globalGroups: GlobalGroup[]; setGlobalGroups: (groups: GlobalGroup[]) => void; projects: Project[]; currentProjectId: string; focusMode: boolean; setFocusMode: (focusMode: boolean) => void; focusedTableId: string | null; setFocusedTableId: (tableId: string | null) => void; focusHighlightedTableIds: string[] | null; handleTableSelection: (tableId: string) => void; }) {
   const diagramRef = useRef<HTMLDivElement>(null);
 
   // Editable project name
@@ -708,6 +749,357 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
     reader.readAsText(file);
   };
 
+  // Export Data Product
+  const handleExportDataProduct = (groupId: string, isGlobal: boolean = false) => {
+    let dataProductName = '';
+    let dataProductTables: string[] = [];
+    
+    if (isGlobal) {
+      const globalGroup = globalGroups.find(g => g.id === groupId);
+      if (!globalGroup) return;
+      
+      dataProductName = globalGroup.name;
+      dataProductTables = globalGroup.tableRefs
+        .filter(ref => ref.projectId === currentProjectId)
+        .map(ref => ref.tableId);
+    } else {
+      const localGroup = groups.find(g => g.id === groupId);
+      if (!localGroup) return;
+      
+      dataProductName = localGroup.name;
+      dataProductTables = localGroup.tableIds;
+    }
+    
+    if (dataProductTables.length === 0) {
+      alert('This Data Product contains no tables.');
+      return;
+    }
+    
+    // Filter tables and relationships for this data product
+    const filteredTables = tables.filter(t => dataProductTables.includes(t.id));
+    const filteredRelationships = relationships.filter(r => 
+      dataProductTables.includes(r.sourceTableId) && dataProductTables.includes(r.targetTableId)
+    );
+    
+    // Create Excel export for the data product
+    const tablesSheet = filteredTables.map(t => ({
+      id: t.id,
+      name: t.name,
+      type: t.type,
+      scdType: t.scdType,
+      positionX: t.position?.x ?? '',
+      positionY: t.position?.y ?? '',
+      dataProduct: dataProductName,
+    }));
+    
+    const columnsSheet = filteredTables.flatMap(t =>
+      t.columns.map(col => ({
+        tableId: t.id,
+        name: col.name,
+        type: col.type,
+        isPK: col.isPK ? 1 : 0,
+        isFK: col.isFK ? 1 : 0,
+        nullable: col.nullable ? 1 : 0,
+      }))
+    );
+    
+    const relsSheet = filteredRelationships.map(r => {
+      const sourceTable = filteredTables.find(t => t.id === r.sourceTableId);
+      const targetTable = filteredTables.find(t => t.id === r.targetTableId);
+      return {
+        id: r.id,
+        sourceTable: sourceTable?.name ?? r.sourceTableId,
+        targetTable: targetTable?.name ?? r.targetTableId,
+        type: r.type,
+        fkColumn: r.fkColumn,
+      };
+    });
+    
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tablesSheet), 'Tables');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(columnsSheet), 'Columns');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(relsSheet), 'Relationships');
+    
+    const fileName = safeFileName(`${dataProductName}-DataProduct`, '.xlsx');
+    XLSX.writeFile(wb, fileName);
+    
+    alert(`Successfully exported Data Product "${dataProductName}" with ${filteredTables.length} tables and ${filteredRelationships.length} relationships.`);
+  };
+
+  // Force-Directed Layout Algorithm
+  const handleForceDirectedLayout = () => {
+    if (tables.length === 0) {
+      alert('No tables to organize.');
+      return;
+    }
+
+    // Initialize positions randomly if not set
+    const positions = new Map<string, { x: number; y: number }>();
+    tables.forEach((table, index) => {
+      if (table.position) {
+        positions.set(table.id, table.position);
+      } else {
+        // Start in a circle if no position
+        const angle = (index / tables.length) * 2 * Math.PI;
+        const radius = 300;
+        positions.set(table.id, {
+          x: 400 + radius * Math.cos(angle),
+          y: 300 + radius * Math.sin(angle)
+        });
+      }
+    });
+
+    // Physics simulation parameters
+    const attractionForce = 0.1; // Connected tables attract
+    const repulsionForce = 1000; // All tables repel each other
+    const damping = 0.9; // Friction
+    const iterations = 100;
+    const timeStep = 0.1;
+
+    // Create velocity map
+    const velocities = new Map<string, { x: number; y: number }>();
+    tables.forEach(table => {
+      velocities.set(table.id, { x: 0, y: 0 });
+    });
+
+    // Run physics simulation
+    for (let iter = 0; iter < iterations; iter++) {
+      // Calculate forces
+      const forces = new Map<string, { x: number; y: number }>();
+      tables.forEach(table => {
+        forces.set(table.id, { x: 0, y: 0 });
+      });
+
+      // Repulsion between all pairs of tables
+      for (let i = 0; i < tables.length; i++) {
+        for (let j = i + 1; j < tables.length; j++) {
+          const table1 = tables[i];
+          const table2 = tables[j];
+          const pos1 = positions.get(table1.id)!;
+          const pos2 = positions.get(table2.id)!;
+
+          const dx = pos2.x - pos1.x;
+          const dy = pos2.y - pos1.y;
+          const distance = Math.sqrt(dx * dx + dy * dy) + 0.1; // Avoid division by zero
+
+          // Repulsion force (inverse square law)
+          const repulsion = repulsionForce / (distance * distance);
+          const fx = (dx / distance) * repulsion;
+          const fy = (dy / distance) * repulsion;
+
+          const force1 = forces.get(table1.id)!;
+          const force2 = forces.get(table2.id)!;
+          force1.x -= fx;
+          force1.y -= fy;
+          force2.x += fx;
+          force2.y += fy;
+        }
+      }
+
+      // Attraction between connected tables
+      relationships.forEach(rel => {
+        const pos1 = positions.get(rel.sourceTableId)!;
+        const pos2 = positions.get(rel.targetTableId)!;
+
+        const dx = pos2.x - pos1.x;
+        const dy = pos2.y - pos1.y;
+        const distance = Math.sqrt(dx * dx + dy * dy) + 0.1;
+
+        // Attraction force (proportional to distance)
+        const attraction = distance * attractionForce;
+        const fx = (dx / distance) * attraction;
+        const fy = (dy / distance) * attraction;
+
+        const force1 = forces.get(rel.sourceTableId)!;
+        const force2 = forces.get(rel.targetTableId)!;
+        force1.x += fx;
+        force1.y += fy;
+        force2.x -= fx;
+        force2.y -= fy;
+      });
+
+      // Apply forces and update positions
+      tables.forEach(table => {
+        const force = forces.get(table.id)!;
+        const velocity = velocities.get(table.id)!;
+        const position = positions.get(table.id)!;
+
+        // Update velocity (F = ma, assume m = 1)
+        velocity.x += force.x * timeStep;
+        velocity.y += force.y * timeStep;
+
+        // Apply damping
+        velocity.x *= damping;
+        velocity.y *= damping;
+
+        // Update position
+        position.x += velocity.x * timeStep;
+        position.y += velocity.y * timeStep;
+
+        // Keep tables within reasonable bounds
+        position.x = Math.max(50, Math.min(750, position.x));
+        position.y = Math.max(50, Math.min(550, position.y));
+      });
+    }
+
+    // Apply final positions
+    tables.forEach(table => {
+      const finalPos = positions.get(table.id)!;
+      onNodePositionChange(table.id, finalPos);
+    });
+
+    alert(`Force-directed layout applied to ${tables.length} tables with ${relationships.length} relationships.`);
+  };
+
+  // Grid Layout Algorithm
+  const handleGridLayout = () => {
+    if (tables.length === 0) {
+      alert('No tables to organize.');
+      return;
+    }
+
+    const cols = Math.ceil(Math.sqrt(tables.length));
+    const rows = Math.ceil(tables.length / cols);
+    const cellWidth = 300;
+    const cellHeight = 200;
+    const startX = 100;
+    const startY = 100;
+
+    tables.forEach((table, index) => {
+      const row = Math.floor(index / cols);
+      const col = index % cols;
+      const x = startX + col * cellWidth;
+      const y = startY + row * cellHeight;
+      
+      onNodePositionChange(table.id, { x, y });
+    });
+
+    alert(`Grid layout applied to ${tables.length} tables in ${cols}x${rows} grid.`);
+  };
+
+  // Tree Layout Algorithm (hierarchical)
+  const handleTreeLayout = () => {
+    if (tables.length === 0) {
+      alert('No tables to organize.');
+      return;
+    }
+
+    // Build adjacency list
+    const adjacency = new Map<string, string[]>();
+    tables.forEach(table => {
+      adjacency.set(table.id, []);
+    });
+
+    relationships.forEach(rel => {
+      const sourceNeighbors = adjacency.get(rel.sourceTableId) || [];
+      const targetNeighbors = adjacency.get(rel.targetTableId) || [];
+      sourceNeighbors.push(rel.targetTableId);
+      targetNeighbors.push(rel.sourceTableId);
+      adjacency.set(rel.sourceTableId, sourceNeighbors);
+      adjacency.set(rel.targetTableId, targetNeighbors);
+    });
+
+    // Find root (table with most connections, prefer fact tables)
+    let root = tables[0].id;
+    let maxConnections = 0;
+    tables.forEach(table => {
+      const connections = adjacency.get(table.id)?.length || 0;
+      if (connections > maxConnections || (connections === maxConnections && table.type === 'fact')) {
+        maxConnections = connections;
+        root = table.id;
+      }
+    });
+
+    // BFS to assign levels
+    const levels = new Map<string, number>();
+    const visited = new Set<string>();
+    const queue: { id: string; level: number }[] = [{ id: root, level: 0 }];
+    
+    while (queue.length > 0) {
+      const { id, level } = queue.shift()!;
+      if (visited.has(id)) continue;
+      
+      visited.add(id);
+      levels.set(id, level);
+      
+      const neighbors = adjacency.get(id) || [];
+      neighbors.forEach(neighborId => {
+        if (!visited.has(neighborId)) {
+          queue.push({ id: neighborId, level: level + 1 });
+        }
+      });
+    }
+
+    // Position tables by level
+    const levelGroups = new Map<number, string[]>();
+    tables.forEach(table => {
+      const level = levels.get(table.id) || 0;
+      const group = levelGroups.get(level) || [];
+      group.push(table.id);
+      levelGroups.set(level, group);
+    });
+
+    const levelHeight = 250;
+    const tableSpacing = 300;
+    const startX = 200;
+    const startY = 100;
+
+    levelGroups.forEach((tableIds, level) => {
+      const levelWidth = tableIds.length * tableSpacing;
+      const levelStartX = startX - (levelWidth - tableSpacing) / 2;
+      
+      tableIds.forEach((tableId, index) => {
+        const x = levelStartX + index * tableSpacing;
+        const y = startY + level * levelHeight;
+        onNodePositionChange(tableId, { x, y });
+      });
+    });
+
+    alert(`Tree layout applied with ${levelGroups.size} levels.`);
+  };
+
+  // Auto-Organize all fact tables (improved)
+  const handleAutoOrganize = () => {
+    const factTables = tables.filter(t => t.type === 'fact');
+    
+    if (factTables.length === 0) {
+      alert('No fact tables found in the diagram.');
+      return;
+    }
+
+    // Organize each fact table with its dimensions
+    factTables.forEach((factTable, factIndex) => {
+      const connectedDimensions = relationships
+        .filter(rel => rel.sourceTableId === factTable.id || rel.targetTableId === factTable.id)
+        .map(rel => {
+          const isSource = rel.sourceTableId === factTable.id;
+          return isSource ? rel.targetTableId : rel.sourceTableId;
+        })
+        .filter((tableId, index, arr) => arr.indexOf(tableId) === index);
+
+      if (connectedDimensions.length > 0) {
+        // Position fact table
+        const factX = 400 + (factIndex * 600);
+        const factY = 300;
+        onNodePositionChange(factTable.id, { x: factX, y: factY });
+
+        // Position dimensions around the fact table
+        const radius = 200;
+        const angleStep = (2 * Math.PI) / connectedDimensions.length;
+        
+        connectedDimensions.forEach((dimTableId, dimIndex) => {
+          const angle = dimIndex * angleStep;
+          const x = factX + radius * Math.cos(angle);
+          const y = factY + radius * Math.sin(angle);
+          
+          onNodePositionChange(dimTableId, { x, y });
+        });
+      }
+    });
+
+    alert(`Auto-organized ${factTables.length} fact tables with their connected dimensions.`);
+  };
+
   // --- GROUP MODE STATE ---
   const [groupMode, setGroupMode] = useState(false);
   const [groupType, setGroupType] = useState<'local' | 'global'>('local');
@@ -738,8 +1130,8 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
     setSelectedGlobalTables([]);
   };
   const handleTableClick = (tableId: string) => {
-    if (!groupMode || groupType !== 'local') return;
-    setSelectedTables(sel => sel.includes(tableId) ? sel.filter(id => id !== tableId) : [...sel, tableId]);
+    if (!groupMode) return;
+    setSelectedTables(ids => ids.includes(tableId) ? ids.filter(id => id !== tableId) : [...ids, tableId]);
   };
   const handleGlobalTableClick = (projectId: string, tableId: string) => {
     if (!groupMode || groupType !== 'global') return;
@@ -751,30 +1143,17 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
     );
   };
   const handleCreateGroup = () => {
-    if (groupType === 'local') {
-      if (!groupNameInput.trim() || selectedTables.length === 0) return;
-      setGroups([
-        ...groups,
-        {
-          id: groupNameInput.trim().toLowerCase().replace(/[^a-z0-9\-_]+/gi, '_'),
-          name: groupNameInput.trim(),
-          tableIds: selectedTables,
-        },
-      ]);
-    } else {
-      if (!groupNameInput.trim() || selectedGlobalTables.length === 0) return;
-      setGlobalGroups([
-        ...globalGroups,
-        {
-          id: groupNameInput.trim().toLowerCase().replace(/[^a-z0-9\-_]+/gi, '_'),
-          name: groupNameInput.trim(),
-          tableRefs: selectedGlobalTables,
-        },
-      ]);
-    }
+    if (!groupNameInput.trim() || selectedTables.length === 0) return;
+    setGroups([
+      ...groups,
+      {
+        id: groupNameInput.trim().toLowerCase().replace(/[^a-z0-9\-_]+/gi, '_'),
+        name: groupNameInput.trim(),
+        tableIds: selectedTables,
+      },
+    ]);
     setGroupNameInput('');
     setSelectedTables([]);
-    setSelectedGlobalTables([]);
     setGroupMode(false);
   };
   const handleToggleGroup = (groupId: string) => {
@@ -824,270 +1203,628 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
   // --- END GROUP MODE HANDLERS ---
 
   // --- GROUP HIGHLIGHTING LOGIC ---
-  const highlightedTableIds = activeGroupIds.length > 0
-    ? Array.from(new Set(activeGroupIds.flatMap(id => groups.find(g => g.id === id)?.tableIds || [])))
-    : null;
-  const highlightedGlobalTableIds = activeGlobalGroupIds.length > 0
-    ? Array.from(new Set(activeGlobalGroupIds.flatMap(id =>
-        globalGroups.find(g => g.id === id)?.tableRefs.filter(ref => ref.projectId === currentProjectId).map(ref => ref.tableId) || []
-      )))
-    : null;
+  // In DiagramPage component:
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const [showMoreDataProducts, setShowMoreDataProducts] = useState(false);
+
+  // Get the most recent data product and older ones
+  const mostRecentGroup = groups.length > 0 ? groups[groups.length - 1] : null;
+  const olderGroups = groups.length > 1 ? groups.slice(0, -1) : [];
+
+  // Compute highlightedTableIds - allow focus mode to work within data product context
+  let highlightedTableIds: string[] | null = null;
+  
+  if (focusMode && focusHighlightedTableIds) {
+    // If focus mode is active and a data product is selected, 
+    // only highlight tables that are both in the data product AND connected to focused table
+    if (selectedGroupId) {
+      const selectedGroup = groups.find(g => g.id === selectedGroupId);
+      if (selectedGroup) {
+        const dataProductTables = new Set(selectedGroup.tableIds);
+        highlightedTableIds = focusHighlightedTableIds.filter(tableId => 
+          dataProductTables.has(tableId)
+        );
+      } else {
+        highlightedTableIds = focusHighlightedTableIds;
+      }
+    } else {
+      // No data product selected, use normal focus mode
+      highlightedTableIds = focusHighlightedTableIds;
+    }
+  } else if (selectedGroupId) {
+    // Data product selected but no focus mode
+    highlightedTableIds = groups.find(g => g.id === selectedGroupId)?.tableIds || [];
+  } else if (activeGroupIds.length > 0) {
+    // Active groups but no specific selection
+    highlightedTableIds = Array.from(new Set(activeGroupIds.flatMap(id => groups.find(g => g.id === id)?.tableIds || [])));
+  }
+
+  // Don't clear selected data product when focus mode is activated
+  // This allows focus mode to work within data product context
   // --- END GROUP HIGHLIGHTING LOGIC ---
 
   return (
     <div style={{ padding: 24 }}>
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 18 }}>
-        {editingName ? (
-          <form
-            onSubmit={e => { e.preventDefault(); onRenameProject(nameInput); setEditingName(false); }}
-            style={{ flex: 1 }}
-          >
-            <input
-              value={nameInput}
-              onChange={e => setNameInput(e.target.value)}
-              autoFocus
-              onBlur={() => { onRenameProject(nameInput); setEditingName(false); }}
-              style={{ fontSize: 28, fontWeight: 700, color: '#c00', border: '1px solid #bbb', borderRadius: 4, padding: '2px 8px', width: '60%' }}
-            />
-          </form>
-        ) : (
-          <span
-            style={{ margin: 0, fontSize: 28, fontWeight: 700, color: '#c00', flex: 1, display: 'flex', alignItems: 'center', cursor: 'pointer' }}
-            onMouseEnter={() => setHoverName(true)}
-            onMouseLeave={() => setHoverName(false)}
-            onClick={() => setEditingName(true)}
-          >
-            {projectName}
-            {hoverName && (
-              <span style={{ marginLeft: 8 }} title="Rename diagram">
-                <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M14.85 2.85a2.121 2.121 0 0 1 3 3l-9.5 9.5-4 1 1-4 9.5-9.5Zm2.12 2.12-1.06-1.06a1.121 1.121 0 0 0-1.59 0l-9.5 9.5a1 1 0 0 0-.26.46l-1 4a1 1 0 0 0 1.22 1.22l4-1a1 1 0 0 0 .46-.26l9.5-9.5a1.121 1.121 0 0 0 0-1.59Z" fill="#1976d2"/></svg>
-              </span>
-            )}
-          </span>
-        )}
-        {/* Import/Export Tabs */}
-        <div style={{ display: 'flex', alignItems: 'center', background: '#f5f5f5', borderRadius: 8, padding: 4, marginLeft: 16 }}>
-          <button
-            onClick={() => setActiveTab('export')}
-            style={{
-              padding: '8px 16px',
-              border: 'none',
-              borderRadius: 6,
-              background: activeTab === 'export' ? '#1976d2' : 'transparent',
-              color: activeTab === 'export' ? '#fff' : '#666',
-              fontWeight: 600,
-              cursor: 'pointer',
-              fontSize: 14,
-              transition: 'all 0.2s',
-            }}
-          >
-            Export
-          </button>
-          <button
-            onClick={() => setActiveTab('import')}
-            style={{
-              padding: '8px 16px',
-              border: 'none',
-              borderRadius: 6,
-              background: activeTab === 'import' ? '#1976d2' : 'transparent',
-              color: activeTab === 'import' ? '#fff' : '#666',
-              fontWeight: 600,
-              cursor: 'pointer',
-              fontSize: 14,
-              transition: 'all 0.2s',
-            }}
-          >
-            Import
-          </button>
-        </div>
-        
-        {/* Export/Import Buttons */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 12 }}>
-          {activeTab === 'export' ? (
-            <>
-              <IconButton onClick={handleExportPNG} title="Export as PNG"><ImageIcon /></IconButton>
-              <IconButton onClick={handleExportSQL} title="Export as SQL"><SQLIcon /></IconButton>
-              <IconButton onClick={handleExportJSON} title="Save as JSON"><SaveIcon /></IconButton>
-              <IconButton onClick={handleExportExcel} title="Export as Excel"><DownloadIcon /></IconButton>
-            </>
+      {/* RIBBON TOOLBAR */}
+      <div style={{ 
+        background: 'linear-gradient(135deg, #e8f4f8 0%, #d4e6f1 100%)', 
+        borderBottom: '1px solid #bdc3c7', 
+        padding: '8px 16px',
+        marginBottom: 16,
+        borderRadius: '8px 8px 0 0',
+        boxShadow: '0 1px 4px rgba(0,0,0,0.05)'
+      }}>
+        {/* Project Name */}
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
+          {editingName ? (
+            <form
+              onSubmit={e => { e.preventDefault(); onRenameProject(nameInput); setEditingName(false); }}
+              style={{ flex: 1 }}
+            >
+              <input
+                value={nameInput}
+                onChange={e => setNameInput(e.target.value)}
+                autoFocus
+                onBlur={() => { onRenameProject(nameInput); setEditingName(false); }}
+                style={{ fontSize: 24, fontWeight: 700, color: '#1976d2', border: '1px solid #bbb', borderRadius: 4, padding: '4px 8px', width: '60%' }}
+              />
+            </form>
           ) : (
-            <>
-              <label title="Import JSON" style={{ display: 'inline-block', cursor: 'pointer' }}>
-                <UploadIcon />
-                <input type="file" accept="application/json" style={{ display: 'none' }} onChange={handleImportJSON} />
-              </label>
-              <label title="Import Excel" style={{ display: 'inline-block', cursor: 'pointer' }}>
-                <ExcelIcon />
-                <input type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={handleImportExcel} />
-              </label>
-              <label title="Import Databricks SQL" style={{ display: 'inline-block', cursor: 'pointer' }}>
-                <DatabricksIcon />
-                <input type="file" accept=".sql" style={{ display: 'none' }} onChange={handleImportDatabricksSQL} />
-              </label>
-            </>
+            <span
+              style={{ margin: 0, fontSize: 24, fontWeight: 700, color: '#1976d2', flex: 1, display: 'flex', alignItems: 'center', cursor: 'pointer' }}
+              onMouseEnter={() => setHoverName(true)}
+              onMouseLeave={() => setHoverName(false)}
+              onClick={() => setEditingName(true)}
+            >
+              {projectName}
+              {hoverName && (
+                <span style={{ marginLeft: 8 }} title="Rename diagram">
+                  <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M14.85 2.85a2.121 2.121 0 0 1 3 3l-9.5 9.5-4 1 1-4 9.5-9.5Zm2.12 2.12-1.06-1.06a1.121 1.121 0 0 0-1.59 0l-9.5 9.5a1 1 0 0 0-.26.46l-1 4a1 1 0 0 0 1.22 1.22l4-1a1 1 0 0 0 .46-.26l9.5-9.5a1.121 1.121 0 0 0 0-1.59Z" fill="#1976d2"/></svg>
+                </span>
+              )}
+            </span>
           )}
         </div>
-        <button
-          style={{
-            marginLeft: 16,
-            background: groupMode ? '#1976d2' : '#eee',
-            color: groupMode ? '#fff' : '#1976d2',
-            border: 'none',
-            borderRadius: 6,
-            padding: '6px 16px',
-            fontWeight: 600,
-            cursor: 'pointer',
-            fontSize: 15,
-          }}
-          onClick={handleToggleGroupMode}
-          title="Toggle Data Products mode"
-        >
-          {groupMode ? 'Exit Data Products' : 'Data Products'}
-        </button>
-        <button
-          style={{
-            marginLeft: 16,
-            background: '#1976d2',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 6,
-            padding: '8px 20px',
-            fontWeight: 600,
-            cursor: 'pointer',
-            fontSize: 15,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-          }}
-          onClick={() => setAddTableOpen(true)}
-          title="Add new table"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" fill="currentColor"/>
-          </svg>
-          Add Table
-        </button>
-      </div>
-      {/* DATA PRODUCT BUTTONS */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-        {/* Local data products */}
-        {groups.map(group => (
-          <div key={group.id} style={{ display: 'flex', alignItems: 'center', background: activeGroupIds.includes(group.id) ? '#1976d2' : '#eee', color: activeGroupIds.includes(group.id) ? '#fff' : '#1976d2', borderRadius: 6, padding: '4px 10px', fontWeight: 600, cursor: 'pointer' }}>
-            <span onClick={() => handleToggleGroup(group.id)}>{group.name}</span>
-            <span style={{ marginLeft: 6, cursor: 'pointer' }} title="Data Product settings" onClick={() => handleOpenGroupModal(group.id, false)}>
-              <svg width="16" height="16" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8" stroke="#888" strokeWidth="2"/><path d="M10 6v4l3 2" stroke="#888" strokeWidth="2" strokeLinecap="round"/></svg>
-            </span>
+
+        {/* Ribbon Sections */}
+        <div style={{ display: 'flex', gap: 24, alignItems: 'center' }}>
+          
+          {/* HOME SECTION */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: '#5d6d7e', marginRight: 8 }}>Home</span>
+            <button
+              style={{
+                background: '#1976d2',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 4,
+                padding: '6px 12px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                fontSize: 13,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+              }}
+              onClick={() => setAddTableOpen(true)}
+              title="Add new table"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" fill="currentColor"/>
+              </svg>
+              Add Table
+            </button>
+            <select
+              style={{
+                background: '#fff',
+                color: '#222',
+                border: '1px solid #ccc',
+                borderRadius: 4,
+                padding: '6px 12px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                fontSize: 13,
+              }}
+              title="Choose a layout preset"
+              defaultValue=""
+              onChange={e => {
+                if (e.target.value === 'force') handleForceDirectedLayout();
+                if (e.target.value === 'grid') handleGridLayout();
+                if (e.target.value === 'tree') handleTreeLayout();
+                e.target.value = '';
+              }}
+            >
+              <option value="" disabled>Layout</option>
+              <option value="force">Force-Directed</option>
+              <option value="grid">Grid</option>
+              <option value="tree">Tree</option>
+            </select>
           </div>
-        ))}
-        {/* Global data products */}
-        {globalGroups.map(group => (
-          <div key={group.id} style={{ display: 'flex', alignItems: 'center', background: activeGlobalGroupIds.includes(group.id) ? '#1976d2' : '#eee', color: activeGlobalGroupIds.includes(group.id) ? '#fff' : '#1976d2', borderRadius: 6, padding: '4px 10px', fontWeight: 600, cursor: 'pointer' }}>
-            <span onClick={() => handleToggleGlobalGroup(group.id)}>
-              <svg width="16" height="16" viewBox="0 0 20 20" fill="none" style={{ marginRight: 4, verticalAlign: 'middle' }}><circle cx="10" cy="10" r="8" stroke="#1976d2" strokeWidth="2" fill="#fff"/><path d="M10 2a8 8 0 0 1 0 16M2 10a8 8 0 0 1 16 0" stroke="#1976d2" strokeWidth="1.5"/><ellipse cx="10" cy="10" rx="3.5" ry="8" stroke="#1976d2" strokeWidth="1.5"/></svg>
-              {group.name}
-            </span>
-            <span style={{ marginLeft: 6, cursor: 'pointer' }} title="Global Data Product settings" onClick={() => handleOpenGroupModal(group.id, true)}>
-              <svg width="16" height="16" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8" stroke="#888" strokeWidth="2"/><path d="M10 6v4l3 2" stroke="#888" strokeWidth="2" strokeLinecap="round"/></svg>
-            </span>
+
+          {/* VIEW SECTION */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: '#5d6d7e', marginRight: 8 }}>View</span>
+            <button
+              style={{
+                background: focusMode ? '#1976d2' : '#fff',
+                color: focusMode ? '#fff' : '#222',
+                border: '1px solid #ccc',
+                borderRadius: 4,
+                padding: '6px 12px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                fontSize: 13,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+              }}
+              onClick={() => {
+                setFocusMode(!focusMode);
+                setFocusedTableId(null);
+              }}
+              title="Toggle Focus Mode"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill={focusMode ? 'currentColor' : 'none'} />
+                <circle cx="12" cy="12" r="4" fill={focusMode ? '#fff' : 'currentColor'} />
+              </svg>
+              Focus Mode
+            </button>
           </div>
-        ))}
-      </div>
-      {/* DATA PRODUCTS MODE UI */}
-      {groupMode && (
-        <div style={{ background: '#e3f2fd', borderRadius: 8, padding: 16, marginBottom: 16 }}>
-          <div style={{ fontWeight: 600, marginBottom: 8 }}>Create a Data Product:</div>
-          <div style={{ marginBottom: 12 }}>
-            <label>
-              <input type="radio" checked={groupType === 'local'} onChange={() => setGroupType('local')} /> Local Data Product
-            </label>
-            <label style={{ marginLeft: 18 }}>
-              <input type="radio" checked={groupType === 'global'} onChange={() => setGroupType('global')} /> Global Data Product
-            </label>
-          </div>
-          {groupType === 'local' ? (
-            <>
-              <div style={{ fontWeight: 500, marginBottom: 8 }}>Select tables for Data Product (this project):</div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-                {tables.map(t => (
-                  <div
-                    key={t.id}
-                    onClick={() => handleTableClick(t.id)}
-                    style={{
-                      padding: '6px 14px',
-                      borderRadius: 6,
-                      background: selectedTables.includes(t.id) ? '#1976d2' : '#fff',
-                      color: selectedTables.includes(t.id) ? '#fff' : '#1976d2',
-                      border: '1.5px solid #1976d2',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      marginBottom: 4,
-                    }}
-                  >
-                    {t.name}
-                  </div>
-                ))}
+
+          {/* DATA PRODUCTS SECTION */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: '#5d6d7e', marginRight: 8 }}>Data Products</span>
+            <button
+              style={{
+                background: groupMode ? '#1976d2' : '#fff',
+                color: groupMode ? '#fff' : '#222',
+                border: '1px solid #ccc',
+                borderRadius: 4,
+                padding: '6px 12px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                fontSize: 13,
+              }}
+              onClick={() => { handleToggleGroupMode(); setGroupType('local'); }}
+              title="Toggle data products mode"
+            >
+              {groupMode ? 'Active' : 'Create'}
+            </button>
+            
+            {/* Data Products Creation Bar - Show when in group mode */}
+            {groupMode && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#e3f2fd', padding: '4px 8px', borderRadius: 4, border: '1px solid #bbdefb' }}>
+                <input
+                  value={groupNameInput}
+                  onChange={e => setGroupNameInput(e.target.value)}
+                  placeholder="Data Product name"
+                  style={{ fontSize: 12, padding: '2px 6px', borderRadius: 3, border: '1px solid #bbb', width: 120 }}
+                />
+                <button
+                  onClick={handleCreateGroup}
+                  style={{ background: '#1976d2', color: '#fff', border: 'none', borderRadius: 3, padding: '2px 8px', fontWeight: 600, fontSize: 11 }}
+                  disabled={!groupNameInput.trim() || selectedTables.length === 0}
+                >
+                  Create
+                </button>
               </div>
-            </>
-                      ) : (
-            <>
-              <div style={{ fontWeight: 500, marginBottom: 8 }}>Select tables for Data Product (any project):</div>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                {projects.map(p => (
+            )}
+            
+            {/* Display Created Data Products */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', position: 'relative' }}>
+              {/* Show most recent data product prominently */}
+              {mostRecentGroup && (
+                <button
+                  key={mostRecentGroup.id}
+                  style={{
+                    background: selectedGroupId === mostRecentGroup.id ? '#1976d2' : '#fff',
+                    color: selectedGroupId === mostRecentGroup.id ? '#fff' : '#1976d2',
+                    border: '1px solid #1976d2',
+                    borderRadius: 12,
+                    padding: '2px 8px',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 2,
+                  }}
+                  onClick={() => setSelectedGroupId(selectedGroupId === mostRecentGroup.id ? null : mostRecentGroup.id)}
+                >
+                  {mostRecentGroup.name}
                   <button
-                    key={p.id}
-                    onClick={() => setGlobalProjectTab(p.id)}
                     style={{
-                      padding: '6px 14px',
-                      borderRadius: 6,
-                      background: globalProjectTab === p.id ? '#1976d2' : '#fff',
-                      color: globalProjectTab === p.id ? '#fff' : '#1976d2',
-                      border: '1.5px solid #1976d2',
-                      fontWeight: 600,
+                      background: 'none',
+                      border: 'none',
+                      color: 'inherit',
                       cursor: 'pointer',
-                      marginBottom: 4,
+                      fontSize: 10,
+                      padding: 0,
+                      marginLeft: 2,
                     }}
+                    onClick={(e) => { e.stopPropagation(); handleOpenGroupModal(mostRecentGroup.id, false); }}
+                    title="Edit data product"
                   >
-                    {p.name}
+                    ✏️
                   </button>
-                ))}
-              </div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-                {projects.find(p => p.id === globalProjectTab)?.tables.map(t => (
-                  <div
-                    key={t.id}
-                    onClick={() => handleGlobalTableClick(globalProjectTab, t.id)}
+                  <button
                     style={{
-                      padding: '6px 14px',
-                      borderRadius: 6,
-                      background: selectedGlobalTables.some(sel => sel.projectId === globalProjectTab && sel.tableId === t.id) ? '#1976d2' : '#fff',
-                      color: selectedGlobalTables.some(sel => sel.projectId === globalProjectTab && sel.tableId === t.id) ? '#fff' : '#1976d2',
-                      border: '1.5px solid #1976d2',
+                      background: 'none',
+                      border: 'none',
+                      color: 'inherit',
+                      cursor: 'pointer',
+                      fontSize: 10,
+                      padding: 0,
+                      marginLeft: 1,
+                    }}
+                    onClick={(e) => { e.stopPropagation(); handleExportDataProduct(mostRecentGroup.id, false); }}
+                    title="Export data product"
+                  >
+                    📤
+                  </button>
+                </button>
+              )}
+
+              {/* Show "More" dropdown if there are older data products */}
+              {olderGroups.length > 0 && (
+                <div style={{ position: 'relative' }}>
+                  <button
+                    style={{
+                      background: showMoreDataProducts ? '#1976d2' : '#fff',
+                      color: showMoreDataProducts ? '#fff' : '#666',
+                      border: '1px solid #ccc',
+                      borderRadius: 12,
+                      padding: '2px 8px',
+                      fontSize: 11,
                       fontWeight: 600,
                       cursor: 'pointer',
-                      marginBottom: 4,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 2,
                     }}
+                    onClick={() => setShowMoreDataProducts(!showMoreDataProducts)}
+                    title={`${olderGroups.length} more data product${olderGroups.length !== 1 ? 's' : ''}`}
                   >
-                    {t.name}
-                  </div>
-                ))}
+                    More ({olderGroups.length})
+                    <span style={{ fontSize: 10, marginLeft: 2 }}>
+                      {showMoreDataProducts ? '▲' : '▼'}
+                    </span>
+                  </button>
+
+                  {/* Dropdown for older data products */}
+                  {showMoreDataProducts && (
+                    <div style={{
+                      position: 'absolute',
+                      top: '100%',
+                      left: 0,
+                      background: '#fff',
+                      border: '1px solid #ccc',
+                      borderRadius: 8,
+                      boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                      zIndex: 1000,
+                      minWidth: 200,
+                      maxHeight: 300,
+                      overflowY: 'auto',
+                      marginTop: 4,
+                    }}>
+                      {olderGroups.map(group => (
+                        <div
+                          key={group.id}
+                          style={{
+                            padding: '8px 12px',
+                            borderBottom: '1px solid #f0f0f0',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            background: selectedGroupId === group.id ? '#e3f2fd' : 'transparent',
+                          }}
+                          onClick={() => {
+                            setSelectedGroupId(selectedGroupId === group.id ? null : group.id);
+                            setShowMoreDataProducts(false);
+                          }}
+                        >
+                          <span style={{ 
+                            fontSize: 12, 
+                            fontWeight: 600,
+                            color: selectedGroupId === group.id ? '#1976d2' : '#333'
+                          }}>
+                            {group.name}
+                          </span>
+                          <div style={{ display: 'flex', gap: 4 }}>
+                            <button
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                cursor: 'pointer',
+                                fontSize: 10,
+                                padding: 2,
+                                borderRadius: 3,
+                              }}
+                              onClick={(e) => { 
+                                e.stopPropagation(); 
+                                handleOpenGroupModal(group.id, false);
+                                setShowMoreDataProducts(false);
+                              }}
+                              title="Edit data product"
+                            >
+                              ✏️
+                            </button>
+                            <button
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                cursor: 'pointer',
+                                fontSize: 10,
+                                padding: 2,
+                                borderRadius: 3,
+                              }}
+                              onClick={(e) => { 
+                                e.stopPropagation(); 
+                                handleExportDataProduct(group.id, false);
+                                setShowMoreDataProducts(false);
+                              }}
+                              title="Export data product"
+                            >
+                              📤
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* IMPORT/EXPORT SECTION */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: '#5d6d7e', marginRight: 8 }}>Import/Export</span>
+            <div style={{ display: 'flex', alignItems: 'center', background: '#fff', borderRadius: 4, padding: 2, border: '1px solid #ccc' }}>
+              <button
+                onClick={() => setActiveTab('export')}
+                style={{
+                  padding: '4px 12px',
+                  border: 'none',
+                  borderRadius: 3,
+                  background: activeTab === 'export' ? '#1976d2' : 'transparent',
+                  color: activeTab === 'export' ? '#fff' : '#666',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  transition: 'all 0.2s',
+                }}
+              >
+                Export
+              </button>
+              <button
+                onClick={() => setActiveTab('import')}
+                style={{
+                  padding: '4px 12px',
+                  border: 'none',
+                  borderRadius: 3,
+                  background: activeTab === 'import' ? '#1976d2' : 'transparent',
+                  color: activeTab === 'import' ? '#fff' : '#666',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  transition: 'all 0.2s',
+                }}
+              >
+                Import
+              </button>
+            </div>
+            
+            {/* Export/Import Buttons */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              {activeTab === 'export' ? (
+                <>
+                  <IconButton onClick={handleExportPNG} title="Export as PNG">
+                    <ImageIcon />
+                  </IconButton>
+                  <IconButton onClick={handleExportJSON} title="Export as JSON">
+                    <DownloadIcon />
+                  </IconButton>
+                  <IconButton onClick={handleExportSQL} title="Export as SQL">
+                    <SQLIcon />
+                  </IconButton>
+                  <IconButton onClick={handleExportExcel} title="Export as Excel">
+                    <ExcelIcon />
+                  </IconButton>
+                </>
+              ) : (
+                <>
+                  <IconButton onClick={() => document.getElementById('json-import')?.click()} title="Import JSON">
+                    <UploadIcon />
+                  </IconButton>
+                  <IconButton onClick={() => document.getElementById('excel-import')?.click()} title="Import Excel">
+                    <ExcelIcon />
+                  </IconButton>
+                  <IconButton onClick={() => document.getElementById('databricks-import')?.click()} title="Import Databricks SQL">
+                    <DatabricksIcon />
+                  </IconButton>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* DATA PRODUCT TABLE SELECTION - Show when in group mode, just below the ribbon */}
+      {groupMode && (
+        <div style={{ background: '#e3f2fd', borderRadius: 8, padding: 12, margin: '12px 0 0 0' }}>
+          <div style={{ fontWeight: 500, marginBottom: 8, fontSize: 14 }}>Select tables for Data Product:</div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+            {tables.map(t => (
+              <div
+                key={t.id}
+                onClick={() => handleTableClick(t.id)}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: 6,
+                  background: selectedTables.includes(t.id) ? '#1976d2' : '#fff',
+                  color: selectedTables.includes(t.id) ? '#fff' : '#1976d2',
+                  border: '1.5px solid #1976d2',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  marginBottom: 4,
+                }}
+              >
+                {t.name}
               </div>
-            </>
-          )}
-          <input
-            value={groupNameInput}
-            onChange={e => setGroupNameInput(e.target.value)}
-            placeholder="Data Product name"
-            style={{ fontSize: 15, padding: '4px 10px', borderRadius: 4, border: '1px solid #bbb', marginRight: 8 }}
-          />
-          <button
-            onClick={handleCreateGroup}
-            style={{ background: '#1976d2', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 18px', fontWeight: 600, fontSize: 15 }}
-            disabled={groupType === 'local' ? (!groupNameInput.trim() || selectedTables.length === 0) : (!groupNameInput.trim() || selectedGlobalTables.length === 0)}
-          >
-            Create Data Product
-          </button>
+            ))}
+          </div>
         </div>
       )}
+
+      {/* ASSIST MESSAGES - Show guidance when modes are active */}
+      {focusMode && !focusedTableId && (
+        <div style={{ 
+          background: selectedGroupId 
+            ? 'linear-gradient(135deg, #9c27b0 0%, #7b1fa2 100%)' 
+            : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', 
+          color: '#fff',
+          borderRadius: 8, 
+          padding: '16px 20px', 
+          margin: '12px 0 0 0',
+          textAlign: 'center',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+          border: '1px solid rgba(255,255,255,0.2)'
+        }}>
+          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>
+            🎯 Focus Mode Active
+            {selectedGroupId && (
+              <span style={{ fontSize: 14, opacity: 0.8, marginLeft: 8 }}>
+                (within {groups.find(g => g.id === selectedGroupId)?.name})
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: 14, opacity: 0.9 }}>
+            {selectedGroupId 
+              ? 'Click on any table in the data product to focus on it and its connected relationships within this data product'
+              : 'Click on any table below to focus on it and its connected relationships'
+            }
+          </div>
+        </div>
+      )}
+
+      {focusMode && focusedTableId && (
+        <div style={{ 
+          background: selectedGroupId 
+            ? 'linear-gradient(135deg, #9c27b0 0%, #7b1fa2 100%)' 
+            : 'linear-gradient(135deg, #4caf50 0%, #45a049 100%)', 
+          color: '#fff',
+          borderRadius: 8, 
+          padding: '12px 16px', 
+          margin: '12px 0 0 0',
+          textAlign: 'center',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+          border: '1px solid rgba(255,255,255,0.2)'
+        }}>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>
+            ✅ Focused on: {tables.find(t => t.id === focusedTableId)?.name}
+            {selectedGroupId && (
+              <span style={{ fontSize: 12, opacity: 0.8, marginLeft: 8 }}>
+                (within {groups.find(g => g.id === selectedGroupId)?.name})
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: 12, opacity: 0.8, marginTop: 2 }}>
+            {selectedGroupId 
+              ? 'Showing connected tables within the selected data product'
+              : 'Showing connected tables and relationships'
+            }
+          </div>
+        </div>
+      )}
+
+      {groupMode && selectedTables.length === 0 && (
+        <div style={{ 
+          background: 'linear-gradient(135deg, #ff9800 0%, #f57c00 100%)', 
+          color: '#fff',
+          borderRadius: 8, 
+          padding: '16px 20px', 
+          margin: '12px 0 0 0',
+          textAlign: 'center',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+          border: '1px solid rgba(255,255,255,0.2)'
+        }}>
+          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>
+            📦 Data Product Creation Mode
+          </div>
+          <div style={{ fontSize: 14, opacity: 0.9 }}>
+            Select tables above to include in your data product, then enter a name and click Create
+          </div>
+        </div>
+      )}
+
+      {groupMode && selectedTables.length > 0 && (
+        <div style={{ 
+          background: 'linear-gradient(135deg, #2196f3 0%, #1976d2 100%)', 
+          color: '#fff',
+          borderRadius: 8, 
+          padding: '12px 16px', 
+          margin: '12px 0 0 0',
+          textAlign: 'center',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+          border: '1px solid rgba(255,255,255,0.2)'
+        }}>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>
+            ✅ {selectedTables.length} table{selectedTables.length !== 1 ? 's' : ''} selected
+          </div>
+          <div style={{ fontSize: 12, opacity: 0.8, marginTop: 2 }}>
+            Enter a name in the ribbon above and click Create to save your data product
+          </div>
+        </div>
+      )}
+
+      {/* DIAGRAM CANVAS */}
+      <div ref={diagramRef}>
+              <DiagramBuilder
+        tables={tables}
+        relationships={relationships}
+        onDeleteTable={onDeleteTable}
+        onNodePositionChange={onNodePositionChange}
+        onAddColumn={onAddColumn}
+        onDeleteColumn={onDeleteColumn}
+        onAddRelationship={onAddRelationship}
+        onRenameTable={onRenameTable}
+        onRenameColumn={onRenameColumn}
+        onAddTable={onAddTable}
+        groupMode={groupMode}
+        onTableSelect={groupMode ? handleTableClick : handleTableSelection}
+        highlightedTableIds={highlightedTableIds}
+        addTableOpen={addTableOpen}
+        onAddTableOpen={setAddTableOpen}
+        focusedTableId={focusedTableId}
+      />
+      </div>
+
+      {/* Hidden file inputs for import */}
+      <input
+        id="json-import"
+        type="file"
+        accept="application/json"
+        style={{ display: 'none' }}
+        onChange={handleImportJSON}
+      />
+      <input
+        id="excel-import"
+        type="file"
+        accept=".xlsx,.xls"
+        style={{ display: 'none' }}
+        onChange={handleImportExcel}
+      />
+      <input
+        id="databricks-import"
+        type="file"
+        accept=".sql"
+        style={{ display: 'none' }}
+        onChange={handleImportDatabricksSQL}
+      />
+
       {/* DATA PRODUCT MANAGEMENT MODAL */}
       {groupModal.open && (
         <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'rgba(0,0,0,0.25)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -1177,26 +1914,6 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
           </div>
         </div>
       )}
-      {/* DIAGRAM CANVAS */}
-      <div ref={diagramRef}>
-        <DiagramBuilder
-          tables={tables}
-          relationships={relationships}
-          onDeleteTable={onDeleteTable}
-          onNodePositionChange={onNodePositionChange}
-          onAddColumn={onAddColumn}
-          onDeleteColumn={onDeleteColumn}
-          onAddRelationship={onAddRelationship}
-          onRenameTable={onRenameTable}
-          onRenameColumn={onRenameColumn}
-          onAddTable={onAddTable}
-          groupMode={groupMode}
-          onTableSelect={handleTableClick}
-          highlightedTableIds={highlightedTableIds || highlightedGlobalTableIds}
-          addTableOpen={addTableOpen}
-          onAddTableOpen={setAddTableOpen}
-        />
-      </div>
       
       {/* ADD TABLE MODAL */}
       <AddTableModal
@@ -1330,6 +2047,29 @@ function App() {
     setProjectData(project.tables, project.relationships, groups);
   };
 
+  // Focus Mode state and logic
+  const [focusMode, setFocusMode] = useState(false);
+  const [focusedTableId, setFocusedTableId] = useState<string | null>(null);
+
+  // Focus Mode logic
+  let focusHighlightedTableIds: string[] | null = null;
+  if (focusMode && focusedTableId) {
+    // Find all directly connected tables
+    const connected = project.relationships
+      .filter(r => r.sourceTableId === focusedTableId || r.targetTableId === focusedTableId)
+      .map(r => r.sourceTableId === focusedTableId ? r.targetTableId : r.sourceTableId);
+    focusHighlightedTableIds = [focusedTableId, ...connected];
+  }
+
+  // General table selection handler
+  const handleTableSelection = (tableId: string) => {
+    if (focusMode) {
+      setFocusedTableId(tableId);
+    }
+    // Add any other table selection logic here in the future
+    console.log('Table selected:', tableId);
+  };
+
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       {/* Project tabs */}
@@ -1397,6 +2137,12 @@ function App() {
           setGlobalGroups={setGlobalGroups}
           projects={projects}
           currentProjectId={project.id}
+          focusMode={focusMode}
+          setFocusMode={setFocusMode}
+          focusedTableId={focusedTableId}
+          setFocusedTableId={setFocusedTableId}
+          focusHighlightedTableIds={focusHighlightedTableIds}
+          handleTableSelection={handleTableSelection}
         />
       </main>
     </div>

@@ -7,7 +7,7 @@ const PencilIcon = ({ style = {} }: { style?: React.CSSProperties }) => (
 );
 
 function TableNode({ data, id }: NodeProps) {
-  const { table, onDeleteTable, onAddColumn, onDeleteColumn, onRenameTable, onRenameColumn, groupMode, onTableSelect, highlighted = true } = data;
+  const { table, onDeleteTable, onAddColumn, onDeleteColumn, onRenameTable, onRenameColumn, groupMode, onTableSelect, highlighted = true, focusedTableId } = data;
   const [colName, setColName] = React.useState('');
   const [editingTable, setEditingTable] = React.useState(false);
   const [tableName, setTableName] = React.useState(table.name);
@@ -17,6 +17,11 @@ function TableNode({ data, id }: NodeProps) {
   const [hoverColIdx, setHoverColIdx] = React.useState<number | null>(null);
 
   React.useEffect(() => { setTableName(table.name); }, [table.name]);
+
+  // If not highlighted, don't render the node at all
+  if (!highlighted) {
+    return null;
+  }
 
   return (
     <div
@@ -31,12 +36,10 @@ function TableNode({ data, id }: NodeProps) {
         position: 'relative',
         marginLeft: 18,
         marginRight: 18,
-        opacity: highlighted ? 1 : 0.25,
-        pointerEvents: highlighted ? 'auto' : 'none',
-        outline: groupMode && highlighted ? '2px solid #1976d2' : undefined,
-        cursor: groupMode ? 'pointer' : undefined,
+        outline: (groupMode && highlighted) || focusedTableId === id ? '2px solid #1976d2' : undefined,
+        cursor: onTableSelect ? 'pointer' : undefined,
       }}
-      onClick={groupMode && onTableSelect ? (e) => { e.stopPropagation(); onTableSelect(id); } : undefined}
+      onClick={onTableSelect ? (e) => { e.stopPropagation(); onTableSelect(id); } : undefined}
       onMouseEnter={() => setHoverTable(true)}
       onMouseLeave={() => { setHoverTable(false); setHoverColIdx(null); }}
     >
@@ -92,9 +95,36 @@ function TableNode({ data, id }: NodeProps) {
             )}
           </span>
         )}
-        <span style={{ fontSize: 11, fontWeight: 400, color: '#666', marginLeft: 8 }}>
-          {table.type}, {table.scdType}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          {/* Fact/Dimension Badge */}
+          <span style={{ 
+            fontSize: 10, 
+            fontWeight: 600, 
+            padding: '2px 6px', 
+            borderRadius: 10, 
+            color: '#fff',
+            background: table.type === 'fact' ? '#1976d2' : '#9c27b0',
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px'
+          }}>
+            {table.type === 'fact' ? '⭐' : '🔷'} {table.type}
+          </span>
+          {/* SCD Type Badge */}
+          {table.scdType !== 'none' && (
+            <span style={{ 
+              fontSize: 10, 
+              fontWeight: 600, 
+              padding: '2px 6px', 
+              borderRadius: 10, 
+              color: '#fff',
+              background: '#ff9800',
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px'
+            }}>
+              {table.scdType}
+            </span>
+          )}
+        </div>
       </div>
       <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>
         {table.columns.map((col: ColumnConfig, idx: number) => (
@@ -305,6 +335,7 @@ function DiagramBuilder({
   highlightedTableIds = null,
   addTableOpen = false,
   onAddTableOpen,
+  focusedTableId = null,
 }: {
   tables: TableConfig[];
   relationships: RelationshipConfig[];
@@ -321,9 +352,11 @@ function DiagramBuilder({
   highlightedTableIds?: string[] | null;
   addTableOpen?: boolean;
   onAddTableOpen?: (open: boolean) => void;
+  focusedTableId?: string | null;
 }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [pendingConn, setPendingConn] = useState<{ source: string; target: string } | null>(null);
+  const [selectedFactTable, setSelectedFactTable] = useState<string | null>(null);
 
   // Use positions from tables, default if missing
   const nodes: Node[] = tables.map((table, idx) => ({
@@ -339,17 +372,25 @@ function DiagramBuilder({
       groupMode,
       onTableSelect,
       highlighted: highlightedTableIds ? highlightedTableIds.includes(table.id) : true,
+      focusedTableId,
     },
     position: table.position || { x: 100 + (idx % 4) * 250, y: 50 + Math.floor(idx / 4) * 200 },
   }));
 
-  const edges: Edge[] = relationships.map(rel => ({
-    id: rel.id,
-    source: rel.sourceTableId,
-    target: rel.targetTableId,
-    animated: true,
-    label: `${rel.type}, FK: ${rel.fkColumn}`,
-  }));
+  const edges: Edge[] = relationships
+    .filter(rel => {
+      // Only show relationships where both source and target tables are highlighted
+      const sourceHighlighted = highlightedTableIds ? highlightedTableIds.includes(rel.sourceTableId) : true;
+      const targetHighlighted = highlightedTableIds ? highlightedTableIds.includes(rel.targetTableId) : true;
+      return sourceHighlighted && targetHighlighted;
+    })
+    .map(rel => ({
+      id: rel.id,
+      source: rel.sourceTableId,
+      target: rel.targetTableId,
+      animated: true,
+      label: `${rel.type}, FK: ${rel.fkColumn}`,
+    }));
 
   const onNodesChange: OnNodesChange = useCallback((changes: NodeChange[]) => {
     changes.forEach(change => {
@@ -374,6 +415,57 @@ function DiagramBuilder({
     }
   };
 
+  // Star Align Handler
+  const handleStarAlign = (factTableId: string) => {
+    const factTable = tables.find(t => t.id === factTableId);
+    if (!factTable || factTable.type !== 'fact') return;
+
+    // Find all dimensions connected to this fact table
+    const connectedDimensions = relationships
+      .filter(rel => rel.sourceTableId === factTableId || rel.targetTableId === factTableId)
+      .map(rel => {
+        const isSource = rel.sourceTableId === factTableId;
+        return isSource ? rel.targetTableId : rel.sourceTableId;
+      })
+      .filter((tableId, index, arr) => arr.indexOf(tableId) === index); // Remove duplicates
+
+    if (connectedDimensions.length === 0) {
+      alert('No dimensions found connected to this fact table.');
+      return;
+    }
+
+    // Get current fact table position
+    const factPosition = factTable.position || { x: 400, y: 300 };
+    const radius = 200; // Distance from fact to dimensions
+    const angleStep = (2 * Math.PI) / connectedDimensions.length;
+
+    // Position dimensions in a circle around the fact table
+    connectedDimensions.forEach((dimTableId, index) => {
+      const angle = index * angleStep;
+      const x = factPosition.x + radius * Math.cos(angle);
+      const y = factPosition.y + radius * Math.sin(angle);
+      
+      onNodePositionChange(dimTableId, { x, y });
+    });
+
+    // Center the fact table if it doesn't have a position
+    if (!factTable.position) {
+      onNodePositionChange(factTableId, factPosition);
+    }
+
+    alert(`Star aligned ${connectedDimensions.length} dimensions around "${factTable.name}"`);
+  };
+
+  // Handle table selection for star align
+  const handleTableClick = (tableId: string) => {
+    const table = tables.find(t => t.id === tableId);
+    if (table?.type === 'fact') {
+      setSelectedFactTable(tableId);
+    } else {
+      setSelectedFactTable(null);
+    }
+  };
+
   return (
     <div style={{ width: '100%', height: '80vh', position: 'relative' }}>
       <ReactFlow
@@ -383,10 +475,43 @@ function DiagramBuilder({
         onNodesChange={onNodesChange}
         onConnect={onConnect}
         fitView
+        onNodeClick={(event, node) => handleTableClick(node.id)}
       >
         <Background />
         <Controls />
       </ReactFlow>
+      
+      {/* Star Align Button */}
+      {selectedFactTable && (
+        <button
+          style={{
+            position: 'absolute',
+            top: 20,
+            right: 20,
+            background: '#1976d2',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 8,
+            padding: '10px 16px',
+            fontSize: 14,
+            fontWeight: 600,
+            cursor: 'pointer',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+            zIndex: 10,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+          }}
+          onClick={() => handleStarAlign(selectedFactTable)}
+          title="Star align dimensions around this fact table"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" fill="currentColor"/>
+          </svg>
+          Star Align
+        </button>
+      )}
+      
       <RelationshipModal
         open={modalOpen}
         sourceTable={tables.find(t => t.id === pendingConn?.source)}
