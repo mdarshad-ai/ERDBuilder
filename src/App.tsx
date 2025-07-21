@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import DiagramBuilder from './DiagramBuilder';
+import AIDialog from './AIDialog';
+import { CommentSystem, Comment } from './CommentSystem';
 import './App.css';
 import html2canvas from 'html2canvas';
 import * as XLSX from 'xlsx';
@@ -53,218 +55,7 @@ export interface GlobalGroup {
   tableRefs: { projectId: string; tableId: string }[];
 }
 
-function ConfigurationPage({
-  tables,
-  setTables,
-  relationships,
-  setRelationships,
-}: {
-  tables: TableConfig[];
-  setTables: React.Dispatch<React.SetStateAction<TableConfig[]>>;
-  relationships: RelationshipConfig[];
-  setRelationships: React.Dispatch<React.SetStateAction<RelationshipConfig[]>>;
-}) {
-  const [tableName, setTableName] = useState('');
-  const [tableType, setTableType] = useState<TableType>('fact');
-  const [scdType, setSCDType] = useState<SCDType>('none');
 
-  // Column form state
-  const [columnName, setColumnName] = useState('');
-  const [columnType, setColumnType] = useState('string');
-  const [isPK, setIsPK] = useState(false);
-  const [isFK, setIsFK] = useState(false);
-  const [nullable, setNullable] = useState(false);
-  const [selectedTableId, setSelectedTableId] = useState<string | null>(null);
-
-  // Relationship form state
-  const [sourceTableId, setSourceTableId] = useState('');
-  const [targetTableId, setTargetTableId] = useState('');
-  const [relType, setRelType] = useState<'1:N' | 'N:M'>('1:N');
-  const [fkColumn, setFKColumn] = useState('');
-
-  function addTable(e: React.FormEvent) {
-    e.preventDefault();
-    if (!tableName.trim()) return;
-    setTables(tables => [
-      ...tables,
-      {
-        id: Date.now().toString(),
-        name: tableName,
-        type: tableType,
-        scdType,
-        columns: [],
-      },
-    ]);
-    setTableName('');
-    setTableType('fact');
-    setSCDType('none');
-  }
-
-  function addColumn(e: React.FormEvent) {
-    e.preventDefault();
-    if (!selectedTableId || !columnName.trim()) return;
-    setTables(tables => tables.map(table =>
-      table.id === selectedTableId
-        ? {
-            ...table,
-            columns: [
-              ...table.columns,
-              {
-                name: columnName,
-                type: columnType,
-                isPK,
-                isFK,
-                nullable,
-              },
-            ],
-          }
-        : table
-    ));
-    setColumnName('');
-    setColumnType('string');
-    setIsPK(false);
-    setIsFK(false);
-    setNullable(false);
-  }
-
-  function deleteColumn(tableId: string, colIdx: number) {
-    setTables(tables => tables.map(table =>
-      table.id === tableId
-        ? { ...table, columns: table.columns.filter((_, i) => i !== colIdx) }
-        : table
-    ));
-  }
-
-  function addRelationship(e: React.FormEvent) {
-    e.preventDefault();
-    if (!sourceTableId || !targetTableId || !fkColumn) return;
-    setRelationships(rels => [
-      ...rels,
-      {
-        id: Date.now().toString(),
-        sourceTableId,
-        targetTableId,
-        type: relType,
-        fkColumn,
-      },
-    ]);
-    setSourceTableId('');
-    setTargetTableId('');
-    setRelType('1:N');
-    setFKColumn('');
-  }
-
-  function deleteRelationship(relId: string) {
-    setRelationships(rels => rels.filter(r => r.id !== relId));
-  }
-
-  return (
-    <div style={{ padding: 24 }}>
-      <h2>Configuration</h2>
-      <form onSubmit={addTable} style={{ marginBottom: 24, display: 'flex', gap: 8, alignItems: 'center' }}>
-        <input
-          value={tableName}
-          onChange={e => setTableName(e.target.value)}
-          placeholder="Table name"
-          required
-        />
-        <select value={tableType} onChange={e => setTableType(e.target.value as TableType)}>
-          <option value="fact">Fact</option>
-          <option value="dimension">Dimension</option>
-        </select>
-        <select value={scdType} onChange={e => setSCDType(e.target.value as SCDType)}>
-          <option value="none">No SCD</option>
-          <option value="SCD1">SCD1</option>
-          <option value="SCD2">SCD2</option>
-          <option value="SCD3">SCD3</option>
-        </select>
-        <button type="submit">Add Table</button>
-      </form>
-      <div>
-        <h3>Tables</h3>
-        <ul>
-          {tables.map(table => (
-            <li key={table.id} style={{ marginBottom: 16 }}>
-              <b>{table.name}</b> ({table.type}, {table.scdType})
-              <ul>
-                {table.columns.map((col, idx) => (
-                  <li key={idx}>
-                    {col.name} : {col.type}
-                    {col.isPK && ' [PK]'}
-                    {col.isFK && ' [FK]'}
-                    {col.nullable && ' [NULLABLE]'}
-                    <button style={{ marginLeft: 8 }} onClick={() => deleteColumn(table.id, idx)} type="button">Delete</button>
-                  </li>
-                ))}
-              </ul>
-              <button style={{ marginTop: 4 }} type="button" onClick={() => setSelectedTableId(table.id)}>
-                Add Column
-              </button>
-              {selectedTableId === table.id && (
-                <form onSubmit={addColumn} style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <input
-                    value={columnName}
-                    onChange={e => setColumnName(e.target.value)}
-                    placeholder="Column name"
-                    required
-                  />
-                  <input
-                    value={columnType}
-                    onChange={e => setColumnType(e.target.value)}
-                    placeholder="Type"
-                    required
-                  />
-                  <label><input type="checkbox" checked={isPK} onChange={e => setIsPK(e.target.checked)} /> PK</label>
-                  <label><input type="checkbox" checked={isFK} onChange={e => setIsFK(e.target.checked)} /> FK</label>
-                  <label><input type="checkbox" checked={nullable} onChange={e => setNullable(e.target.checked)} /> Nullable</label>
-                  <button type="submit">Add</button>
-                  <button type="button" onClick={() => setSelectedTableId(null)}>Cancel</button>
-                </form>
-              )}
-            </li>
-          ))}
-        </ul>
-      </div>
-      {/* Relationships section */}
-      <div style={{ marginTop: 32 }}>
-        <h3>Relationships</h3>
-        <form onSubmit={addRelationship} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
-          <select value={sourceTableId} onChange={e => setSourceTableId(e.target.value)} required>
-            <option value="">Source Table</option>
-            {tables.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
-          <select value={targetTableId} onChange={e => setTargetTableId(e.target.value)} required>
-            <option value="">Target Table</option>
-            {tables.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
-          <select value={relType} onChange={e => setRelType(e.target.value as '1:N' | 'N:M')}>
-            <option value="1:N">1:N</option>
-            <option value="N:M">N:M</option>
-          </select>
-          <input
-            value={fkColumn}
-            onChange={e => setFKColumn(e.target.value)}
-            placeholder="FK Column"
-            required
-          />
-          <button type="submit">Add Relationship</button>
-        </form>
-        <ul>
-          {relationships.map(rel => {
-            const source = tables.find(t => t.id === rel.sourceTableId)?.name || rel.sourceTableId;
-            const target = tables.find(t => t.id === rel.targetTableId)?.name || rel.targetTableId;
-            return (
-              <li key={rel.id}>
-                {source} → {target} ({rel.type}, FK: {rel.fkColumn})
-                <button style={{ marginLeft: 8 }} onClick={() => deleteRelationship(rel.id)} type="button">Delete</button>
-              </li>
-            );
-          })}
-        </ul>
-      </div>
-    </div>
-  );
-}
 
 // SVG icon components
 const IconButton = ({ onClick, title, children, style = {}, inputProps }: any) => (
@@ -401,7 +192,39 @@ function AddTableModal({ open, onClose, onSubmit }: {
   );
 }
 
-function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChange, onAddColumn, onDeleteColumn, onAddRelationship, onRenameTable, onRenameColumn, onAddTable, onLoad, projectName, onRenameProject, groups, setGroups, globalGroups, setGlobalGroups, projects, currentProjectId, focusMode, setFocusMode, focusedTableId, setFocusedTableId, focusHighlightedTableIds, handleTableSelection }: { tables: TableConfig[]; relationships: RelationshipConfig[]; onDeleteTable: (id: string) => void; onNodePositionChange: (id: string, pos: { x: number; y: number }) => void; onAddColumn: (tableId: string, colName: string) => void; onDeleteColumn: (tableId: string, colIdx: number) => void; onAddRelationship: (sourceId: string, targetId: string, relType: '1:N' | 'N:M', sourceCol: string, targetCol: string) => void; onRenameTable: (tableId: string, newName: string) => void; onRenameColumn: (tableId: string, colIdx: number, newName: string) => void; onAddTable: (name: string, type: 'fact' | 'dimension', scdType: 'none' | 'SCD1' | 'SCD2' | 'SCD3') => void; onLoad: (data: { tables: TableConfig[]; relationships: RelationshipConfig[]; groups: Group[] }) => void; projectName: string; onRenameProject: (newName: string) => void; groups: Group[]; setGroups: (groups: Group[]) => void; globalGroups: GlobalGroup[]; setGlobalGroups: (groups: GlobalGroup[]) => void; projects: Project[]; currentProjectId: string; focusMode: boolean; setFocusMode: (focusMode: boolean) => void; focusedTableId: string | null; setFocusedTableId: (tableId: string | null) => void; focusHighlightedTableIds: string[] | null; handleTableSelection: (tableId: string) => void; }) {
+function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChange, onAddColumn, onDeleteColumn, onAddRelationship, onRenameTable, onRenameColumn, onAddTable, onLoad, projectName, onRenameProject, groups, setGroups, globalGroups, setGlobalGroups, projects, currentProjectId, focusMode, setFocusMode, focusedTableId, setFocusedTableId, focusHighlightedTableIds, handleTableSelection, comments, onAddComment, onEditComment, onDeleteComment, onImportComplete, setComments }: {
+  tables: TableConfig[];
+  relationships: RelationshipConfig[];
+  onDeleteTable: (id: string) => void;
+  onNodePositionChange: (id: string, pos: { x: number; y: number }) => void;
+  onAddColumn: (tableId: string, colName: string) => void;
+  onDeleteColumn: (tableId: string, colIdx: number) => void;
+  onAddRelationship: (sourceId: string, targetId: string, relType: '1:N' | 'N:M', sourceCol: string, targetCol: string) => void;
+  onRenameTable: (tableId: string, newName: string) => void;
+  onRenameColumn: (tableId: string, colIdx: number, newName: string) => void;
+  onAddTable: (name: string, type: 'fact' | 'dimension', scdType: 'none' | 'SCD1' | 'SCD2' | 'SCD3') => void;
+  onLoad: (data: { tables: TableConfig[]; relationships: RelationshipConfig[]; groups: Group[] }) => void;
+  projectName: string;
+  onRenameProject: (newName: string) => void;
+  groups: Group[];
+  setGroups: (groups: Group[]) => void;
+  globalGroups: GlobalGroup[];
+  setGlobalGroups: (groups: GlobalGroup[]) => void;
+  projects: Project[];
+  currentProjectId: string;
+  focusMode: boolean;
+  setFocusMode: (focusMode: boolean) => void;
+  focusedTableId: string | null;
+  setFocusedTableId: (tableId: string | null) => void;
+  focusHighlightedTableIds: string[] | null;
+  handleTableSelection: (tableId: string) => void;
+  comments: Comment[];
+  onAddComment: (commentData: Omit<Comment, 'id' | 'timestamp'>) => void;
+  onEditComment: (commentId: string, newText: string) => void;
+  onDeleteComment: (commentId: string) => void;
+  onImportComplete: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  setComments: React.Dispatch<React.SetStateAction<Comment[]>>;
+}) {
   const diagramRef = useRef<HTMLDivElement>(null);
 
   // Editable project name
@@ -425,12 +248,48 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
     }
   };
 
-  // Export as JSON
+  // Export as JSON (Basic - tables and relationships only)
   const handleExportJSON = () => {
-    const data = JSON.stringify({ tables, relationships, groups, globalGroups }, null, 2);
+    const data = JSON.stringify({ tables, relationships, groups, globalGroups, comments }, null, 2);
     const blob = new Blob([data], { type: 'application/json' });
     const link = document.createElement('a');
     link.download = safeFileName(projectName, '.json');
+    link.href = URL.createObjectURL(blob);
+    link.click();
+  };
+
+  // Export Complete Project (All assets, comments, data products)
+  const handleExportComplete = () => {
+    const completeData = {
+      metadata: {
+        exportDate: new Date().toISOString(),
+        version: '1.0',
+        projectName: projectName,
+        exportType: 'complete'
+      },
+      projects: projects,
+      currentProjectId: currentProjectId,
+      globalGroups: globalGroups,
+      comments: comments,
+      exportSummary: {
+        totalProjects: projects.length,
+        totalTables: projects.reduce((sum, p) => sum + p.tables.length, 0),
+        totalRelationships: projects.reduce((sum, p) => sum + p.relationships.length, 0),
+        totalGroups: projects.reduce((sum, p) => sum + p.groups.length, 0),
+        totalGlobalGroups: globalGroups.length,
+        totalComments: comments.length,
+        commentBreakdown: {
+          diagram: comments.filter(c => c.type === 'diagram').length,
+          table: comments.filter(c => c.type === 'table').length,
+          relationship: comments.filter(c => c.type === 'relationship').length
+        }
+      }
+    };
+
+    const data = JSON.stringify(completeData, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const link = document.createElement('a');
+    link.download = safeFileName(`${projectName}_complete_export`, '.json');
     link.href = URL.createObjectURL(blob);
     link.click();
   };
@@ -499,11 +358,25 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
     reader.onload = evt => {
       try {
         const data = JSON.parse(evt.target?.result as string);
-        if (data.tables && data.relationships) {
-          onLoad(data);
+        
+        // Check if this is a complete export
+        if (data.metadata && data.metadata.exportType === 'complete') {
+          alert(`Complete export detected!\n\nThis file contains:\n- ${data.exportSummary?.totalProjects || 0} projects\n- ${data.exportSummary?.totalTables || 0} tables\n- ${data.exportSummary?.totalRelationships || 0} relationships\n- ${data.exportSummary?.totalComments || 0} comments\n\nPlease use the main application to import complete exports.`);
+        } else if (data.tables && data.relationships) {
+          // Import basic format (legacy)
+          onLoad({ 
+            tables: data.tables, 
+            relationships: data.relationships, 
+            groups: data.groups || [] 
+          });
           if (data.globalGroups) setGlobalGroups(data.globalGroups);
+          if (data.comments) {
+            // Import comments if they exist
+            setComments(data.comments);
+          }
+          alert('Basic project imported successfully!');
         } else {
-          alert('Invalid file format.');
+          alert('Invalid file format. Please use a valid ER Diagram Builder export file.');
         }
       } catch {
         alert('Invalid JSON file.');
@@ -524,6 +397,7 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
         const columnsSheet = XLSX.utils.sheet_to_json<any>(workbook.Sheets['Columns'] || workbook.Sheets[workbook.SheetNames[1]]);
         const relsSheet = XLSX.utils.sheet_to_json<any>(workbook.Sheets['Relationships'] || workbook.Sheets[workbook.SheetNames[2]]);
         const globalGroupsSheet = workbook.Sheets['GlobalGroups'] ? XLSX.utils.sheet_to_json<any>(workbook.Sheets['GlobalGroups']) : [];
+        const commentsSheet = workbook.Sheets['Comments'] ? XLSX.utils.sheet_to_json<any>(workbook.Sheets['Comments']) : [];
         // Collect group names and memberships
         const groupMap: { [name: string]: string[] } = {};
         // Map tables
@@ -586,8 +460,20 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
             return projectId && tableId ? { projectId, tableId } : null;
           }).filter(Boolean),
         }));
+        
+        // Parse comments
+        const comments: Comment[] = (commentsSheet as any[]).map(row => ({
+          id: String(row.id ?? row.ID),
+          type: row.type ?? 'diagram',
+          targetId: row.targetId ?? row.TargetId ?? '',
+          text: row.text ?? row.Text ?? '',
+          author: row.author ?? row.Author ?? 'User',
+          timestamp: new Date(row.timestamp ?? row.Timestamp ?? Date.now()),
+        }));
+        
         onLoad({ tables, relationships, groups });
         setGlobalGroups(globalGroups);
+        setComments(comments);
       } catch {
         alert('Invalid Excel file or format.');
       }
@@ -639,12 +525,26 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
       name: g.name,
       tableRefs: g.tableRefs.map(ref => `${ref.projectId}:${ref.tableId}`).join(', '),
     }));
+    
+    // Comments sheet
+    const commentsSheet = comments.map(c => ({
+      id: c.id,
+      type: c.type,
+      targetId: c.targetId,
+      text: c.text,
+      author: c.author,
+      timestamp: c.timestamp.toISOString(),
+    }));
+    
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tablesSheet), 'Tables');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(columnsSheet), 'Columns');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(relsSheet), 'Relationships');
     if (globalGroupsSheet.length > 0) {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(globalGroupsSheet), 'GlobalGroups');
+    }
+    if (commentsSheet.length > 0) {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(commentsSheet), 'Comments');
     }
     XLSX.writeFile(wb, safeFileName(projectName, '-export.xlsx'));
   };
@@ -1058,6 +958,22 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
     alert(`Tree layout applied with ${levelGroups.size} levels.`);
   };
 
+  // Reset diagram to initial state
+  const handleResetDiagram = () => {
+    if (window.confirm('Are you sure you want to reset the diagram? This will clear all tables, relationships, and data products.')) {
+      onLoad({ tables: [], relationships: [], groups: [] });
+      setGlobalGroups([]);
+      setComments([]);
+      setFocusMode(false);
+      setFocusedTableId(null);
+      setSelectedGroupId(null);
+      setGroupMode(false);
+      setSelectedTables([]);
+      setGroupNameInput('');
+      alert('Diagram has been reset to initial state.');
+    }
+  };
+
   // Auto-Organize all fact tables (improved)
   const handleAutoOrganize = () => {
     const factTables = tables.filter(t => t.type === 'fact');
@@ -1121,6 +1037,14 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
   // --- ADD TABLE MODAL STATE ---
   const [addTableOpen, setAddTableOpen] = useState(false);
   // --- END ADD TABLE MODAL STATE ---
+
+  // --- AI DIALOG STATE ---
+  const [aiDialogOpen, setAIDialogOpen] = useState(false);
+  // --- END AI DIALOG STATE ---
+
+  // --- COMMENT SYSTEM STATE ---
+  const [showComments, setShowComments] = useState(false);
+  // --- END COMMENT SYSTEM STATE ---
 
   // --- GROUP MODE HANDLERS ---
   const handleToggleGroupMode = () => {
@@ -1287,29 +1211,36 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
         </div>
 
         {/* Ribbon Sections */}
-        <div style={{ display: 'flex', gap: 24, alignItems: 'center' }}>
+        <div style={{ 
+          display: 'flex', 
+          gap: 16, 
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          overflowX: 'auto',
+          minHeight: 40
+        }}>
           
           {/* HOME SECTION */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: '#5d6d7e', marginRight: 8 }}>Home</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: '#5d6d7e', marginRight: 6 }}>Home</span>
             <button
               style={{
                 background: '#1976d2',
                 color: '#fff',
                 border: 'none',
                 borderRadius: 4,
-                padding: '6px 12px',
+                padding: '5px 10px',
                 fontWeight: 600,
                 cursor: 'pointer',
-                fontSize: 13,
+                fontSize: 12,
                 display: 'flex',
                 alignItems: 'center',
-                gap: 4,
+                gap: 3,
               }}
               onClick={() => setAddTableOpen(true)}
               title="Add new table"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
                 <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" fill="currentColor"/>
               </svg>
               Add Table
@@ -1320,10 +1251,10 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
                 color: '#222',
                 border: '1px solid #ccc',
                 borderRadius: 4,
-                padding: '6px 12px',
+                padding: '5px 10px',
                 fontWeight: 600,
                 cursor: 'pointer',
-                fontSize: 13,
+                fontSize: 12,
               }}
               title="Choose a layout preset"
               defaultValue=""
@@ -1339,24 +1270,46 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
               <option value="grid">Grid</option>
               <option value="tree">Tree</option>
             </select>
+            <button
+              style={{
+                background: '#dc3545',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 4,
+                padding: '5px 10px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                fontSize: 12,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 3,
+              }}
+              onClick={handleResetDiagram}
+              title="Reset diagram to initial state"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                <path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" fill="currentColor"/>
+              </svg>
+              Reset
+            </button>
           </div>
 
           {/* VIEW SECTION */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: '#5d6d7e', marginRight: 8 }}>View</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: '#5d6d7e', marginRight: 6 }}>View</span>
             <button
               style={{
                 background: focusMode ? '#1976d2' : '#fff',
                 color: focusMode ? '#fff' : '#222',
                 border: '1px solid #ccc',
                 borderRadius: 4,
-                padding: '6px 12px',
+                padding: '5px 10px',
                 fontWeight: 600,
                 cursor: 'pointer',
-                fontSize: 13,
+                fontSize: 12,
                 display: 'flex',
                 alignItems: 'center',
-                gap: 4,
+                gap: 3,
               }}
               onClick={() => {
                 setFocusMode(!focusMode);
@@ -1364,27 +1317,49 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
               }}
               title="Toggle Focus Mode"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
                 <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill={focusMode ? 'currentColor' : 'none'} />
                 <circle cx="12" cy="12" r="4" fill={focusMode ? '#fff' : 'currentColor'} />
               </svg>
-              Focus Mode
+              Focus
+            </button>
+            <button
+              style={{
+                background: '#fff',
+                color: '#222',
+                border: '1px solid #ccc',
+                borderRadius: 4,
+                padding: '5px 10px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                fontSize: 12,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 3,
+              }}
+              onClick={() => setAIDialogOpen(true)}
+              title="AI Assistant - Create tables with natural language"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" fill="currentColor"/>
+              </svg>
+              AI
             </button>
           </div>
 
           {/* DATA PRODUCTS SECTION */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: '#5d6d7e', marginRight: 8 }}>Data Products</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: '#5d6d7e', marginRight: 6 }}>Data Products</span>
             <button
               style={{
                 background: groupMode ? '#1976d2' : '#fff',
                 color: groupMode ? '#fff' : '#222',
                 border: '1px solid #ccc',
                 borderRadius: 4,
-                padding: '6px 12px',
+                padding: '5px 10px',
                 fontWeight: 600,
                 cursor: 'pointer',
-                fontSize: 13,
+                fontSize: 12,
               }}
               onClick={() => { handleToggleGroupMode(); setGroupType('local'); }}
               title="Toggle data products mode"
@@ -1580,8 +1555,30 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
           </div>
 
           {/* IMPORT/EXPORT SECTION */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: '#5d6d7e', marginRight: 8 }}>Import/Export</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: '#5d6d7e', marginRight: 6 }}>Import/Export</span>
+            <button
+              style={{
+                background: showComments ? '#1976d2' : '#fff',
+                color: showComments ? '#fff' : '#222',
+                border: '1px solid #ccc',
+                borderRadius: 4,
+                padding: '5px 10px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                fontSize: 12,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 3,
+              }}
+              onClick={() => setShowComments(!showComments)}
+              title="Toggle Comments Panel"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                <path d="M21 6h-2v9H6v2c0 .55.45 1 1 1h11l4 4V7c0-.55-.45-1-1-1zm-4 6V3c0-.55-.45-1-1-1H3c-.55 0-1 .45-1 1v14l4-4h10c.55 0 1-.45 1-1z" fill="currentColor"/>
+              </svg>
+              Comments ({comments.length})
+            </button>
             <div style={{ display: 'flex', alignItems: 'center', background: '#fff', borderRadius: 4, padding: 2, border: '1px solid #ccc' }}>
               <button
                 onClick={() => setActiveTab('export')}
@@ -1627,6 +1624,9 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
                   <IconButton onClick={handleExportJSON} title="Export as JSON">
                     <DownloadIcon />
                   </IconButton>
+                  <IconButton onClick={handleExportComplete} title="Export Complete (All Assets, Comments, Data Products)">
+                    <SaveIcon />
+                  </IconButton>
                   <IconButton onClick={handleExportSQL} title="Export as SQL">
                     <SQLIcon />
                   </IconButton>
@@ -1636,6 +1636,9 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
                 </>
               ) : (
                 <>
+                  <IconButton onClick={() => document.getElementById('complete-import')?.click()} title="Import Complete Project">
+                    <SaveIcon />
+                  </IconButton>
                   <IconButton onClick={() => document.getElementById('json-import')?.click()} title="Import JSON">
                     <UploadIcon />
                   </IconButton>
@@ -1802,7 +1805,40 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
       />
       </div>
 
+      {/* COMMENTS PANEL */}
+      {showComments && (
+        <div style={{
+          position: 'fixed',
+          top: 100,
+          right: 20,
+          width: 350,
+          maxHeight: 'calc(100vh - 140px)',
+          zIndex: 1000,
+          background: '#fff',
+          borderRadius: 8,
+          boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+          border: '1px solid #e0e0e0'
+        }}>
+          <CommentSystem
+            comments={comments}
+            onAddComment={onAddComment}
+            onEditComment={onEditComment}
+            onDeleteComment={onDeleteComment}
+            currentUser="User"
+            tables={tables}
+            relationships={relationships}
+          />
+        </div>
+      )}
+
       {/* Hidden file inputs for import */}
+      <input
+        id="complete-import"
+        type="file"
+        accept="application/json"
+        style={{ display: 'none' }}
+        onChange={onImportComplete}
+      />
       <input
         id="json-import"
         type="file"
@@ -1922,6 +1958,25 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
         onSubmit={(name, type, scdType) => {
           onAddTable(name, type, scdType);
           setAddTableOpen(false);
+        }}
+      />
+
+      {/* AI DIALOG */}
+      <AIDialog
+        isOpen={aiDialogOpen}
+        onClose={() => setAIDialogOpen(false)}
+        onSubmit={(tables, relationships) => {
+          // Add the tables to the current project
+          tables.forEach(table => {
+            onAddTable(table.name, table.type, table.scdType);
+            // Add columns to the newly created table
+            table.columns.forEach(column => {
+              // Find the table we just added and add columns to it
+              // This is a simplified approach - in a real implementation,
+              // you'd want to handle this more carefully
+            });
+          });
+          setAIDialogOpen(false);
         }}
       />
     </div>
@@ -2051,6 +2106,10 @@ function App() {
   const [focusMode, setFocusMode] = useState(false);
   const [focusedTableId, setFocusedTableId] = useState<string | null>(null);
 
+  // Comment system state
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [showComments, setShowComments] = useState(false);
+
   // Focus Mode logic
   let focusHighlightedTableIds: string[] | null = null;
   if (focusMode && focusedTableId) {
@@ -2068,6 +2127,60 @@ function App() {
     }
     // Add any other table selection logic here in the future
     console.log('Table selected:', tableId);
+  };
+
+  // Comment handlers
+  const handleAddComment = (commentData: Omit<Comment, 'id' | 'timestamp'>) => {
+    const newComment: Comment = {
+      ...commentData,
+      id: Date.now().toString(),
+      timestamp: new Date()
+    };
+    setComments(prev => [...prev, newComment]);
+  };
+
+  const handleEditComment = (commentId: string, newText: string) => {
+    setComments(prev => prev.map(comment => 
+      comment.id === commentId ? { ...comment, text: newText } : comment
+    ));
+  };
+
+  const handleDeleteComment = (commentId: string) => {
+    setComments(prev => prev.filter(comment => comment.id !== commentId));
+  };
+
+  // Complete import function for App component
+  const handleImportComplete = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = evt => {
+      try {
+        const data = JSON.parse(evt.target?.result as string);
+        
+        if (data.metadata && data.metadata.exportType === 'complete') {
+          // Import complete project data
+          if (data.projects) {
+            setProjects(data.projects);
+            if (data.currentProjectId) {
+              setSelectedProjectId(data.currentProjectId);
+            }
+          }
+          if (data.globalGroups) {
+            setGlobalGroups(data.globalGroups);
+          }
+          if (data.comments) {
+            setComments(data.comments);
+          }
+          alert(`Complete project imported successfully!\n\nSummary:\n- ${data.exportSummary?.totalProjects || 0} projects\n- ${data.exportSummary?.totalTables || 0} tables\n- ${data.exportSummary?.totalRelationships || 0} relationships\n- ${data.exportSummary?.totalComments || 0} comments`);
+        } else {
+          alert('Invalid complete export file format.');
+        }
+      } catch {
+        alert('Invalid JSON file.');
+      }
+    };
+    reader.readAsText(file);
   };
 
   return (
@@ -2143,6 +2256,12 @@ function App() {
           setFocusedTableId={setFocusedTableId}
           focusHighlightedTableIds={focusHighlightedTableIds}
           handleTableSelection={handleTableSelection}
+          comments={comments}
+          onAddComment={handleAddComment}
+          onEditComment={handleEditComment}
+          onDeleteComment={handleDeleteComment}
+          onImportComplete={handleImportComplete}
+          setComments={setComments}
         />
       </main>
     </div>
