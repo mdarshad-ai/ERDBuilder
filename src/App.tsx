@@ -55,7 +55,27 @@ export interface GlobalGroup {
   tableRefs: { projectId: string; tableId: string }[];
 }
 
+// Relationship Inference Types
+export interface RelationshipSuggestion {
+  id: string;
+  fromTable: string;
+  fromColumn: string;
+  toTable: string;
+  toColumn: string;
+  confidence: number;
+  reasoning: string;
+  type: '1:N' | 'N:M' | '1:1';
+  selected: boolean;
+}
 
+export interface InferenceSettings {
+  exactMatch: boolean;
+  namingConventions: boolean;
+  dataTypeMatching: boolean;
+  semanticAnalysis: boolean;
+  minConfidence: number;
+  namingPatterns: string[];
+}
 
 // SVG icon components
 const IconButton = ({ onClick, title, children, style = {}, inputProps }: any) => (
@@ -93,6 +113,14 @@ const DatabricksIcon = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
     <path d="M12 2L2 7v10l10 5 10-5V7l-10-5zM4 8.5L12 12l8-3.5V7L12 10.5 4 7v1.5z" fill="#FF3621"/>
     <path d="M12 14l-8-3.5V7L12 10.5 20 7v3.5L12 14z" fill="#FF3621"/>
+  </svg>
+);
+
+const InferIcon = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+    <path d="M9 12l2 2 4-4" stroke="#9c27b0" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+    <circle cx="12" cy="12" r="9" stroke="#9c27b0" strokeWidth="2"/>
+    <path d="M12 1v6m0 10v6M1 12h6m10 0h6" stroke="#9c27b0" strokeWidth="1" strokeLinecap="round"/>
   </svg>
 );
 
@@ -192,6 +220,540 @@ function AddTableModal({ open, onClose, onSubmit }: {
   );
 }
 
+// Relationship Inference Logic
+export class RelationshipInferenceEngine {
+  private static readonly DEFAULT_PATTERNS = ['_id', '_key', 'Id', 'Key', '_ID', '_KEY'];
+  private static readonly SEMANTIC_KEYWORDS = [
+    'customer', 'order', 'product', 'user', 'account', 'invoice', 'payment',
+    'category', 'supplier', 'employee', 'department', 'location', 'region'
+  ];
+
+  static inferRelationships(
+    tables: TableConfig[], 
+    settings: InferenceSettings
+  ): RelationshipSuggestion[] {
+    const suggestions: RelationshipSuggestion[] = [];
+    let suggestionId = 1;
+
+    for (const sourceTable of tables) {
+      for (const sourceColumn of sourceTable.columns) {
+        for (const targetTable of tables) {
+          if (sourceTable.id === targetTable.id) continue;
+
+          for (const targetColumn of targetTable.columns) {
+            const suggestion = this.analyzePotentialRelationship(
+              sourceTable, sourceColumn, targetTable, targetColumn, settings
+            );
+
+            if (suggestion && suggestion.confidence >= settings.minConfidence) {
+              suggestions.push({
+                ...suggestion,
+                id: `suggestion_${suggestionId++}`,
+                selected: suggestion.confidence >= 0.8 // Auto-select high confidence
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // Remove duplicates and sort by confidence
+    return this.removeDuplicates(suggestions)
+      .sort((a, b) => b.confidence - a.confidence);
+  }
+
+  private static analyzePotentialRelationship(
+    sourceTable: TableConfig,
+    sourceColumn: ColumnConfig,
+    targetTable: TableConfig,
+    targetColumn: ColumnConfig,
+    settings: InferenceSettings
+  ): Omit<RelationshipSuggestion, 'id' | 'selected'> | null {
+    let confidence = 0;
+    const reasons: string[] = [];
+
+    // Exact Match Rule (100% confidence if enabled)
+    if (settings.exactMatch && sourceColumn.name === targetColumn.name) {
+      return {
+        fromTable: sourceTable.id,
+        fromColumn: sourceColumn.name,
+        toTable: targetTable.id,
+        toColumn: targetColumn.name,
+        confidence: 1.0,
+        reasoning: 'Exact column name match',
+        type: this.inferRelationshipType(sourceTable, targetTable)
+      };
+    }
+
+    // Skip exact match if it's enabled and doesn't match
+    if (settings.exactMatch) {
+      return null;
+    }
+
+    // Naming Convention Rules
+    if (settings.namingConventions) {
+      const namingScore = this.analyzeNamingConvention(
+        sourceColumn.name, targetColumn.name, targetTable.name, settings.namingPatterns
+      );
+      if (namingScore > 0) {
+        confidence += namingScore * 0.4;
+        reasons.push(`Naming convention match (${Math.round(namingScore * 100)}%)`);
+      }
+    }
+
+    // Data Type Matching
+    if (settings.dataTypeMatching) {
+      const typeScore = this.analyzeDataTypeCompatibility(sourceColumn, targetColumn);
+      if (typeScore > 0) {
+        confidence += typeScore * 0.3;
+        reasons.push(`Compatible data types`);
+      }
+    }
+
+    // Semantic Analysis
+    if (settings.semanticAnalysis) {
+      const semanticScore = this.analyzeSemanticRelationship(
+        sourceColumn.name, targetColumn.name, sourceTable.name, targetTable.name
+      );
+      if (semanticScore > 0) {
+        confidence += semanticScore * 0.3;
+        reasons.push(`Semantic relationship detected`);
+      }
+    }
+
+    // Primary/Foreign Key hints
+    if (targetColumn.isPK && sourceColumn.isFK) {
+      confidence += 0.2;
+      reasons.push('PK-FK relationship detected');
+    }
+
+    if (confidence > 0) {
+      return {
+        fromTable: sourceTable.id,
+        fromColumn: sourceColumn.name,
+        toTable: targetTable.id,
+        toColumn: targetColumn.name,
+        confidence: Math.min(confidence, 1.0),
+        reasoning: reasons.join(', '),
+        type: this.inferRelationshipType(sourceTable, targetTable)
+      };
+    }
+
+    return null;
+  }
+
+  private static analyzeNamingConvention(
+    sourceCol: string, 
+    targetCol: string, 
+    targetTable: string, 
+    patterns: string[]
+  ): number {
+    const allPatterns = [...patterns, ...this.DEFAULT_PATTERNS];
+    
+    // Check if source column follows pattern: table_name + pattern
+    for (const pattern of allPatterns) {
+      const expectedName = targetTable.toLowerCase() + pattern.toLowerCase();
+      if (sourceCol.toLowerCase() === expectedName) {
+        return 1.0; // Perfect match
+      }
+      
+      // Partial match
+      if (sourceCol.toLowerCase().includes(targetTable.toLowerCase()) && 
+          sourceCol.toLowerCase().includes(pattern.toLowerCase())) {
+        return 0.8;
+      }
+    }
+
+    // Check direct column name similarity
+    if (sourceCol.toLowerCase().includes(targetCol.toLowerCase()) || 
+        targetCol.toLowerCase().includes(sourceCol.toLowerCase())) {
+      return 0.6;
+    }
+
+    return 0;
+  }
+
+  private static analyzeDataTypeCompatibility(
+    sourceCol: ColumnConfig, 
+    targetCol: ColumnConfig
+  ): number {
+    const sourceType = sourceCol.type.toLowerCase();
+    const targetType = targetCol.type.toLowerCase();
+
+    // Exact type match
+    if (sourceType === targetType) return 1.0;
+
+    // Compatible numeric types
+    const numericTypes = ['int', 'integer', 'bigint', 'number', 'long'];
+    if (numericTypes.some(t => sourceType.includes(t)) && 
+        numericTypes.some(t => targetType.includes(t))) {
+      return 0.8;
+    }
+
+    // Compatible string types
+    const stringTypes = ['varchar', 'char', 'text', 'string'];
+    if (stringTypes.some(t => sourceType.includes(t)) && 
+        stringTypes.some(t => targetType.includes(t))) {
+      return 0.6;
+    }
+
+    return 0;
+  }
+
+  private static analyzeSemanticRelationship(
+    sourceCol: string, 
+    targetCol: string, 
+    sourceTable: string, 
+    targetTable: string
+  ): number {
+    const sourceLower = sourceCol.toLowerCase();
+    const targetLower = targetCol.toLowerCase();
+    const sourceTableLower = sourceTable.toLowerCase();
+    const targetTableLower = targetTable.toLowerCase();
+
+    // Check for semantic keywords
+    for (const keyword of this.SEMANTIC_KEYWORDS) {
+      if (sourceLower.includes(keyword) && targetTableLower.includes(keyword)) {
+        return 0.9;
+      }
+      if (sourceTableLower.includes(keyword) && targetLower.includes(keyword)) {
+        return 0.8;
+      }
+    }
+
+    return 0;
+  }
+
+  private static inferRelationshipType(
+    sourceTable: TableConfig, 
+    targetTable: TableConfig
+  ): '1:N' | 'N:M' | '1:1' {
+    // Simple heuristic: fact tables usually have many-to-one relationships with dimensions
+    if (sourceTable.type === 'fact' && targetTable.type === 'dimension') {
+      return '1:N';
+    }
+    if (sourceTable.type === 'dimension' && targetTable.type === 'fact') {
+      return '1:N';
+    }
+    
+    // Default to one-to-many
+    return '1:N';
+  }
+
+  private static removeDuplicates(suggestions: RelationshipSuggestion[]): RelationshipSuggestion[] {
+    const seen = new Set<string>();
+    return suggestions.filter(suggestion => {
+      const key = `${suggestion.fromTable}.${suggestion.fromColumn}->${suggestion.toTable}.${suggestion.toColumn}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+}
+
+// Inference Dialog Component
+function InferenceDialog({ 
+  open, 
+  onClose, 
+  tables, 
+  onApplyRelationships 
+}: { 
+  open: boolean; 
+  onClose: () => void; 
+  tables: TableConfig[];
+  onApplyRelationships: (relationships: RelationshipSuggestion[]) => void;
+}) {
+  const [settings, setSettings] = useState<InferenceSettings>({
+    exactMatch: false,
+    namingConventions: true,
+    dataTypeMatching: true,
+    semanticAnalysis: true,
+    minConfidence: 0.5,
+    namingPatterns: ['_id', '_key', 'Id', 'Key']
+  });
+  
+  const [suggestions, setSuggestions] = useState<RelationshipSuggestion[]>([]);
+  const [showPreview, setShowPreview] = useState(false);
+
+  const handleInfer = () => {
+    const inferred = RelationshipInferenceEngine.inferRelationships(tables, settings);
+    setSuggestions(inferred);
+    setShowPreview(true);
+  };
+
+  const handleApply = () => {
+    const selectedSuggestions = suggestions.filter(s => s.selected);
+    onApplyRelationships(selectedSuggestions);
+    onClose();
+    setShowPreview(false);
+    setSuggestions([]);
+  };
+
+  const toggleSuggestion = (id: string) => {
+    setSuggestions(prev => prev.map(s => 
+      s.id === id ? { ...s, selected: !s.selected } : s
+    ));
+  };
+
+  const selectByConfidence = (minConf: number) => {
+    setSuggestions(prev => prev.map(s => ({
+      ...s, 
+      selected: s.confidence >= minConf
+    })));
+  };
+
+  const getConfidenceColor = (confidence: number) => {
+    if (confidence >= 0.8) return '#4caf50';
+    if (confidence >= 0.6) return '#ff9800';
+    return '#f44336';
+  };
+
+  if (!open) return null;
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        width: '100%',
+        height: '100%',
+        background: 'rgba(0, 0, 0, 0.5)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: '#fff',
+          padding: 24,
+          borderRadius: 8,
+          width: '90%',
+          maxWidth: showPreview ? 900 : 600,
+          maxHeight: '90vh',
+          overflow: 'auto',
+          boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 style={{ margin: '0 0 16px 0', color: '#333' }}>
+          {showPreview ? 'Relationship Suggestions' : 'Infer Relationships'}
+        </h2>
+
+        {!showPreview ? (
+          <div>
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={settings.exactMatch}
+                  onChange={(e) => setSettings(prev => ({ ...prev, exactMatch: e.target.checked }))}
+                  style={{ marginRight: 8 }}
+                />
+                <strong>Exact Match Only</strong> - Column names must be 100% identical
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={settings.namingConventions}
+                  onChange={(e) => setSettings(prev => ({ ...prev, namingConventions: e.target.checked }))}
+                  style={{ marginRight: 8 }}
+                  disabled={settings.exactMatch}
+                />
+                Naming Conventions (FK patterns like table_id → table.id)
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={settings.dataTypeMatching}
+                  onChange={(e) => setSettings(prev => ({ ...prev, dataTypeMatching: e.target.checked }))}
+                  style={{ marginRight: 8 }}
+                  disabled={settings.exactMatch}
+                />
+                Data Type Compatibility
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
+                <input
+                  type="checkbox"
+                  checked={settings.semanticAnalysis}
+                  onChange={(e) => setSettings(prev => ({ ...prev, semanticAnalysis: e.target.checked }))}
+                  style={{ marginRight: 8 }}
+                  disabled={settings.exactMatch}
+                />
+                Semantic Analysis (business term matching)
+              </label>
+            </div>
+
+            {!settings.exactMatch && (
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: 'block', marginBottom: 8, fontWeight: 500 }}>
+                  Minimum Confidence: {Math.round(settings.minConfidence * 100)}%
+                </label>
+                <input
+                  type="range"
+                  min="0.1"
+                  max="1"
+                  step="0.1"
+                  value={settings.minConfidence}
+                  onChange={(e) => setSettings(prev => ({ ...prev, minConfidence: parseFloat(e.target.value) }))}
+                  style={{ width: '100%' }}
+                />
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                onClick={onClose}
+                style={{
+                  padding: '8px 16px',
+                  border: '1px solid #ddd',
+                  borderRadius: 4,
+                  background: '#fff',
+                  cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleInfer}
+                disabled={tables.length < 2}
+                style={{
+                  padding: '8px 16px',
+                  border: 'none',
+                  borderRadius: 4,
+                  background: tables.length < 2 ? '#ccc' : '#9c27b0',
+                  color: '#fff',
+                  cursor: tables.length < 2 ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Analyze Relationships
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <div style={{ marginBottom: 16, display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span style={{ fontSize: 14, color: '#666' }}>
+                Found {suggestions.length} potential relationships
+              </span>
+              <button
+                onClick={() => selectByConfidence(0.8)}
+                style={{ padding: '4px 8px', fontSize: 12, border: '1px solid #4caf50', background: '#fff', borderRadius: 4, cursor: 'pointer' }}
+              >
+                Select High (80%+)
+              </button>
+              <button
+                onClick={() => selectByConfidence(0.6)}
+                style={{ padding: '4px 8px', fontSize: 12, border: '1px solid #ff9800', background: '#fff', borderRadius: 4, cursor: 'pointer' }}
+              >
+                Select Medium (60%+)
+              </button>
+              <button
+                onClick={() => setSuggestions(prev => prev.map(s => ({ ...s, selected: false })))}
+                style={{ padding: '4px 8px', fontSize: 12, border: '1px solid #f44336', background: '#fff', borderRadius: 4, cursor: 'pointer' }}
+              >
+                Clear All
+              </button>
+            </div>
+
+            <div style={{ maxHeight: '400px', overflow: 'auto', border: '1px solid #ddd', borderRadius: 4 }}>
+              {suggestions.map(suggestion => {
+                const sourceTable = tables.find(t => t.id === suggestion.fromTable);
+                const targetTable = tables.find(t => t.id === suggestion.toTable);
+                
+                return (
+                  <div
+                    key={suggestion.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      padding: 12,
+                      borderBottom: '1px solid #eee',
+                      background: suggestion.selected ? '#f3e5f5' : '#fff'
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={suggestion.selected}
+                      onChange={() => toggleSuggestion(suggestion.id)}
+                      style={{ marginRight: 12 }}
+                    />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 500, marginBottom: 4 }}>
+                        {sourceTable?.name}.{suggestion.fromColumn} → {targetTable?.name}.{suggestion.toColumn}
+                      </div>
+                      <div style={{ fontSize: 12, color: '#666' }}>
+                        {suggestion.reasoning}
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        padding: '4px 8px',
+                        borderRadius: 4,
+                        background: getConfidenceColor(suggestion.confidence),
+                        color: '#fff',
+                        fontSize: 12,
+                        fontWeight: 500,
+                        marginLeft: 12
+                      }}
+                    >
+                      {Math.round(suggestion.confidence * 100)}%
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+              <button
+                onClick={() => setShowPreview(false)}
+                style={{
+                  padding: '8px 16px',
+                  border: '1px solid #ddd',
+                  borderRadius: 4,
+                  background: '#fff',
+                  cursor: 'pointer',
+                }}
+              >
+                Back
+              </button>
+              <button
+                onClick={onClose}
+                style={{
+                  padding: '8px 16px',
+                  border: '1px solid #ddd',
+                  borderRadius: 4,
+                  background: '#fff',
+                  cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleApply}
+                disabled={suggestions.filter(s => s.selected).length === 0}
+                style={{
+                  padding: '8px 16px',
+                  border: 'none',
+                  borderRadius: 4,
+                  background: suggestions.filter(s => s.selected).length === 0 ? '#ccc' : '#9c27b0',
+                  color: '#fff',
+                  cursor: suggestions.filter(s => s.selected).length === 0 ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Apply Selected ({suggestions.filter(s => s.selected).length})
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChange, onAddColumn, onDeleteColumn, onAddRelationship, onRenameTable, onRenameColumn, onAddTable, onLoad, projectName, onRenameProject, groups, setGroups, globalGroups, setGlobalGroups, projects, currentProjectId, focusMode, setFocusMode, focusedTableId, setFocusedTableId, focusHighlightedTableIds, handleTableSelection, comments, onAddComment, onEditComment, onDeleteComment, onImportComplete, setComments }: {
   tables: TableConfig[];
   relationships: RelationshipConfig[];
@@ -232,6 +794,40 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
   const [nameInput, setNameInput] = useState(projectName);
   const [hoverName, setHoverName] = useState(false);
   useEffect(() => { setNameInput(projectName); }, [projectName]);
+
+  // Inference dialog state
+  const [inferenceDialogOpen, setInferenceDialogOpen] = useState(false);
+
+  // Handle applying inferred relationships
+  const handleApplyInferredRelationships = (suggestions: RelationshipSuggestion[]) => {
+    const newRelationships = suggestions.map(suggestion => ({
+      id: `inferred_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      sourceTableId: suggestion.fromTable,
+      targetTableId: suggestion.toTable,
+      type: suggestion.type as '1:N' | 'N:M',
+      fkColumn: suggestion.fromColumn,
+    }));
+
+    // Add to existing relationships, avoiding duplicates
+    const existingKeys = new Set(
+      relationships.map(r => `${r.sourceTableId}.${r.fkColumn}->${r.targetTableId}`)
+    );
+    
+    const uniqueNewRelationships = newRelationships.filter(nr => 
+      !existingKeys.has(`${nr.sourceTableId}.${nr.fkColumn}->${nr.targetTableId}`)
+    );
+
+    if (uniqueNewRelationships.length > 0) {
+      onLoad({ 
+        tables, 
+        relationships: [...relationships, ...uniqueNewRelationships], 
+        groups 
+      });
+      alert(`Successfully added ${uniqueNewRelationships.length} new relationships!`);
+    } else {
+      alert('No new relationships to add (all suggestions already exist).');
+    }
+  };
 
   // Helper to sanitize file names
   const safeFileName = (name: string, ext: string) =>
@@ -1651,6 +2247,20 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
                 </>
               )}
             </div>
+            
+            {/* Infer Relationships Button */}
+            <div style={{ marginLeft: 16, borderLeft: '1px solid #e0e0e0', paddingLeft: 16 }}>
+              <IconButton 
+                onClick={() => setInferenceDialogOpen(true)} 
+                title="Infer Relationships"
+                style={{ background: '#f3e5f5', borderRadius: 4, padding: 8 }}
+              >
+                <InferIcon />
+              </IconButton>
+              <span style={{ fontSize: 11, color: '#9c27b0', fontWeight: 600, marginLeft: 4 }}>
+                Infer
+              </span>
+            </div>
           </div>
         </div>
       </div>
@@ -1978,6 +2588,14 @@ function DiagramPage({ tables, relationships, onDeleteTable, onNodePositionChang
           });
           setAIDialogOpen(false);
         }}
+      />
+
+      {/* INFERENCE DIALOG */}
+      <InferenceDialog
+        open={inferenceDialogOpen}
+        onClose={() => setInferenceDialogOpen(false)}
+        tables={tables}
+        onApplyRelationships={handleApplyInferredRelationships}
       />
     </div>
   );
