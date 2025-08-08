@@ -73,6 +73,7 @@ export interface InferenceSettings {
   namingConventions: boolean;
   dataTypeMatching: boolean;
   semanticAnalysis: boolean;
+  cardinalityAnalysis: boolean;
   minConfidence: number;
   namingPatterns: string[];
 }
@@ -281,7 +282,7 @@ export class RelationshipInferenceEngine {
         toColumn: targetColumn.name,
         confidence: 1.0,
         reasoning: 'Exact column name match',
-        type: this.inferRelationshipType(sourceTable, targetTable)
+        type: this.inferRelationshipType(sourceTable, targetTable, settings.cardinalityAnalysis)
       };
     }
 
@@ -327,6 +328,17 @@ export class RelationshipInferenceEngine {
       reasons.push('PK-FK relationship detected');
     }
 
+    // Add cardinality analysis info to reasoning
+    if (settings.cardinalityAnalysis) {
+      const sourceType = sourceTable.type || this.getTableType(sourceTable);
+      const targetType = targetTable.type || this.getTableType(targetTable);
+      const sourceTypeStr = String(sourceType);
+      const targetTypeStr = String(targetType);
+      if (sourceTypeStr !== 'unknown' || targetTypeStr !== 'unknown') {
+        reasons.push(`Cardinality: ${sourceTypeStr}→${targetTypeStr}`);
+      }
+    }
+
     if (confidence > 0) {
       return {
         fromTable: sourceTable.id,
@@ -335,7 +347,7 @@ export class RelationshipInferenceEngine {
         toColumn: targetColumn.name,
         confidence: Math.min(confidence, 1.0),
         reasoning: reasons.join(', '),
-        type: this.inferRelationshipType(sourceTable, targetTable)
+        type: this.inferRelationshipType(sourceTable, targetTable, settings.cardinalityAnalysis)
       };
     }
 
@@ -426,9 +438,37 @@ export class RelationshipInferenceEngine {
 
   private static inferRelationshipType(
     sourceTable: TableConfig, 
-    targetTable: TableConfig
+    targetTable: TableConfig,
+    useCardinalityAnalysis: boolean = false
   ): '1:N' | 'N:M' | '1:1' {
-    // Simple heuristic: fact tables usually have many-to-one relationships with dimensions
+    if (useCardinalityAnalysis) {
+      // Enhanced cardinality analysis based on data warehouse patterns
+      const sourceType = String(sourceTable.type || this.getTableType(sourceTable));
+      const targetType = String(targetTable.type || this.getTableType(targetTable));
+      
+      // Dimension to Fact: 1:N (one dimension record can relate to many fact records)
+      if (sourceType === 'dimension' && targetType === 'fact') {
+        return '1:N';
+      }
+      
+      // Fact to Dimension: N:1 (many fact records relate to one dimension)
+      // But we represent this as 1:N from the dimension perspective
+      if (sourceType === 'fact' && targetType === 'dimension') {
+        return '1:N';
+      }
+      
+      // Dimension to Dimension: 1:1 (hierarchical relationships, lookups)
+      if (sourceType === 'dimension' && targetType === 'dimension') {
+        return '1:1';
+      }
+      
+      // Fact to Fact: N:M (bridge/factless fact tables)
+      if (sourceType === 'fact' && targetType === 'fact') {
+        return 'N:M';
+      }
+    }
+    
+    // Fallback to original logic if types are explicitly set
     if (sourceTable.type === 'fact' && targetTable.type === 'dimension') {
       return '1:N';
     }
@@ -440,14 +480,97 @@ export class RelationshipInferenceEngine {
     return '1:N';
   }
 
-  private static removeDuplicates(suggestions: RelationshipSuggestion[]): RelationshipSuggestion[] {
-    const seen = new Set<string>();
-    return suggestions.filter(suggestion => {
-      const key = `${suggestion.fromTable}.${suggestion.fromColumn}->${suggestion.toTable}.${suggestion.toColumn}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
+  private static getTableType(table: TableConfig): 'dimension' | 'fact' | 'unknown' {
+    const tableName = table.name.toLowerCase();
+    
+    // Common dimension table indicators
+    const dimensionKeywords = ['dim', 'dimension', 'lookup', 'reference', 'master', 'category', 'type', 'status'];
+    const isDimension = dimensionKeywords.some(keyword => tableName.includes(keyword));
+    
+    if (isDimension) {
+      return 'dimension';
+    }
+    
+    // Common fact table indicators  
+    const factKeywords = ['fact', 'transaction', 'sales', 'order', 'event', 'log', 'history', 'detail'];
+    const isFact = factKeywords.some(keyword => tableName.includes(keyword));
+    
+    if (isFact) {
+      return 'fact';
+    }
+    
+    // Analyze table structure for further clues
+    const hasMetrics = table.columns.some(col => {
+      const colName = col.name.toLowerCase();
+      return ['amount', 'quantity', 'count', 'total', 'sum', 'avg', 'measure', 'value'].some(metric => 
+        colName.includes(metric)
+      );
     });
+    
+    const hasManyForeignKeys = table.columns.filter(col => col.isFK).length >= 2;
+    
+    // Tables with metrics and multiple FKs are likely fact tables
+    if (hasMetrics && hasManyForeignKeys) {
+      return 'fact';
+    }
+    
+    // Tables with few FKs and mostly descriptive fields are likely dimensions
+    if (!hasManyForeignKeys && table.columns.length > 2) {
+      return 'dimension';
+    }
+    
+    return 'unknown';
+  }
+
+    private static removeDuplicates(suggestions: RelationshipSuggestion[]): RelationshipSuggestion[] {
+    const uniqueSuggestions: RelationshipSuggestion[] = [];
+    const processedPairs = new Set<string>();
+    
+    for (const suggestion of suggestions) {
+      // Create a bidirectional key to identify the same relationship regardless of direction
+      const table1 = suggestion.fromTable;
+      const table2 = suggestion.toTable;
+      const col1 = suggestion.fromColumn;
+      const col2 = suggestion.toColumn;
+      
+      // Create consistent bidirectional key (alphabetically sorted)
+      const key = table1 < table2 
+        ? `${table1}.${col1}<->${table2}.${col2}`
+        : `${table2}.${col2}<->${table1}.${col1}`;
+      
+      if (processedPairs.has(key)) {
+        // We've already processed this relationship pair, skip
+        continue;
+      }
+      
+      // Find all suggestions for this bidirectional relationship
+      const relatedSuggestions = suggestions.filter(s => {
+        const st1 = s.fromTable;
+        const st2 = s.toTable;
+        const sc1 = s.fromColumn;
+        const sc2 = s.toColumn;
+        
+        // Check if this suggestion represents the same bidirectional relationship
+        return (st1 === table1 && st2 === table2 && sc1 === col1 && sc2 === col2) ||
+               (st1 === table2 && st2 === table1 && sc1 === col2 && sc2 === col1);
+      });
+      
+      // Pick the best suggestion from this group
+      const bestSuggestion = relatedSuggestions.reduce((best: RelationshipSuggestion, current: RelationshipSuggestion) => {
+        // Prioritize higher confidence
+        if (current.confidence !== best.confidence) {
+          return current.confidence > best.confidence ? current : best;
+        }
+        
+        // If confidence is equal, prefer the first one (arbitrary but consistent)
+        return best;
+      });
+      
+      uniqueSuggestions.push(bestSuggestion);
+      processedPairs.add(key);
+    }
+    
+    return uniqueSuggestions;
   }
 }
 
@@ -468,6 +591,7 @@ function InferenceDialog({
     namingConventions: true,
     dataTypeMatching: true,
     semanticAnalysis: true,
+    cardinalityAnalysis: true,
     minConfidence: 0.5,
     namingPatterns: ['_id', '_key', 'Id', 'Key']
   });
@@ -584,6 +708,21 @@ function InferenceDialog({
                   disabled={settings.exactMatch}
                 />
                 Semantic Analysis (business term matching)
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
+                <input
+                  type="checkbox"
+                  checked={settings.cardinalityAnalysis}
+                  onChange={(e) => setSettings(prev => ({ ...prev, cardinalityAnalysis: e.target.checked }))}
+                  style={{ marginRight: 8 }}
+                  disabled={settings.exactMatch}
+                />
+                <div>
+                  <strong>Smart Cardinality Analysis</strong>
+                  <div style={{ fontSize: 12, color: '#666', marginTop: 2 }}>
+                    Dim→Fact: 1:N, Dim→Dim: 1:1, Fact→Fact: N:M
+                  </div>
+                </div>
               </label>
             </div>
 
